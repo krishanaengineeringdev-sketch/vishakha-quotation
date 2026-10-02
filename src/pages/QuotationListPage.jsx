@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { syncPendingChanges, syncFromSupabase } from '../db/localDb';
@@ -265,14 +266,17 @@ export default function QuotationListPage() {
       )}
 
       {/* Hidden offscreen document for direct PDF / WhatsApp generation from list */}
-      {exportData && (
-        <PrintableQuotationDoc
-          ref={offscreenDocRef}
-          quotation={exportData.quotation}
-          profile={exportData.profile}
-          isOffscreen={true}
-        />
-      )}
+      {exportData &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <PrintableQuotationDoc
+            ref={offscreenDocRef}
+            quotation={exportData.quotation}
+            profile={exportData.profile}
+            isOffscreen={true}
+          />,
+          document.body
+        )}
 
       <main className="flex-1 w-full max-w-[520px] lg:max-w-5xl xl:max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-3 sm:pt-6 pb-8">
         {/* Title, Search & Desktop Actions Row */}

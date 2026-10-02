@@ -1,4 +1,4 @@
-import React, { forwardRef } from 'react';
+import React, { forwardRef, useState, useEffect } from 'react';
 import html2canvas from 'html2canvas-pro';
 import { jsPDF } from 'jspdf';
 import { COMPANY_CONFIG } from '../config/companyConfig';
@@ -19,10 +19,91 @@ export function formatDate(dateStr) {
 }
 
 /**
- * Generate PDF blob & jsPDF instance from a DOM element
+ * Convert any image URL to a Base64 data URL (fetch -> blob -> FileReader)
+ * Eliminates CORS taint and load race conditions.
+ */
+export async function urlToBase64(url) {
+  if (!url) return '';
+  if (typeof url === 'string' && url.startsWith('data:')) return url;
+
+  try {
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+    const blob = await res.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result || '');
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (err) {
+    console.warn('urlToBase64 conversion failed for:', url, err);
+    return url;
+  }
+}
+
+/**
+ * Prepare DOM element before capturing:
+ * 1. await document.fonts.ready
+ * 2. every <img> inside capture element: await img.decode() (try/catch), ensure complete && naturalWidth > 0
+ * 3. two requestAnimationFrame ticks plus a ~150ms delay so layout settles
+ */
+export async function prepareElementForCapture(element) {
+  if (!element) return;
+
+  // 1. Await document fonts ready
+  if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+    try {
+      await document.fonts.ready;
+    } catch (e) {
+      console.warn('document.fonts.ready warning:', e);
+    }
+  }
+
+  // 2. Decode every <img> inside capture element and ensure loaded
+  const images = Array.from(element.querySelectorAll('img'));
+  await Promise.all(
+    images.map(async (img) => {
+      try {
+        if (!img.complete || img.naturalWidth === 0) {
+          if (typeof img.decode === 'function') {
+            await img.decode();
+          }
+        }
+      } catch (e) {
+        console.warn('Image decode warning:', img.src, e);
+      }
+
+      if (!img.complete || img.naturalWidth === 0) {
+        await new Promise((resolve) => {
+          const onDone = () => {
+            img.removeEventListener('load', onDone);
+            img.removeEventListener('error', onDone);
+            resolve();
+          };
+          img.addEventListener('load', onDone);
+          img.addEventListener('error', onDone);
+          setTimeout(resolve, 600);
+        });
+      }
+    })
+  );
+
+  // 3. Two requestAnimationFrame ticks plus a ~150ms delay so layout settles
+  await new Promise((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(resolve))
+  );
+  await new Promise((resolve) => setTimeout(resolve, 150));
+}
+
+/**
+ * Generate PDF blob & jsPDF instance from a DOM element using html2canvas-pro & jsPDF
  */
 export async function generateQuotationPdf(targetElement) {
   if (!targetElement) return null;
+
+  // Ensure fonts, images, and layout are 100% settled
+  await prepareElementForCapture(targetElement);
 
   const canvas = await html2canvas(targetElement, {
     scale: 2,
@@ -30,6 +111,7 @@ export async function generateQuotationPdf(targetElement) {
     backgroundColor: '#ffffff',
     width: 794,
     windowWidth: 794,
+    logging: false,
     scrollX: 0,
     scrollY: 0
   });
@@ -40,6 +122,9 @@ export async function generateQuotationPdf(targetElement) {
     format: 'a4'
   });
 
+  // Standard A4 aspect: 210mm x 297mm.
+  // At 794px width with scale 2, canvas height is ~2246px for 1123px standard page height.
+  // If canvas.height <= 2280px (1140px unscaled), it fits cleanly on a single A4 page.
   const isSinglePage = canvas.height <= 2280;
 
   if (isSinglePage) {
@@ -83,11 +168,10 @@ export async function generateQuotationPdf(targetElement) {
 }
 
 /**
- * Share quotation on WhatsApp via Web Share API or wa.me fallback
+ * Format quotation summary text for WhatsApp
  */
-export async function shareQuotationWhatsApp({ quotation, profile, targetElement }) {
-  if (!quotation) return;
-
+export function buildWhatsAppSummaryText(quotation, profile) {
+  if (!quotation) return '';
   const quoteNo = quotation?.quote_no || 'Quote';
   const custName = quotation?.customers?.name || 'Customer';
   const custPlace = quotation?.customers?.place ? ` (${quotation.customers.place})` : '';
@@ -114,26 +198,50 @@ export async function shareQuotationWhatsApp({ quotation, profile, targetElement
     `📞 Contact: ${phone}`,
     `✉️ Email: ${email}`
   ];
-  const summaryText = messageLines.filter(Boolean).join('\n');
+  return messageLines.filter(Boolean).join('\n');
+}
+
+/**
+ * Fallback: download PDF and open WhatsApp link
+ */
+export function fallbackDownloadAndWhatsApp(summaryText, pdfResult, quoteNo) {
+  if (pdfResult?.pdf) {
+    try {
+      pdfResult.pdf.save(`Vishakha_Quotation_${quoteNo || 'Quote'}.pdf`);
+    } catch (e) {
+      console.warn('PDF save fallback warning:', e);
+    }
+  }
+  const waUrl = `https://wa.me/?text=${encodeURIComponent(summaryText || '')}`;
+  window.open(waUrl, '_blank', 'noopener,noreferrer');
+}
+
+/**
+ * Share quotation on WhatsApp via Web Share API or wa.me fallback
+ */
+export async function shareQuotationWhatsApp({ quotation, profile, targetElement, cachedPdfResult }) {
+  if (!quotation) return { success: false };
+
+  const quoteNo = quotation?.quote_no || 'Quote';
+  const companyName = profile?.name || COMPANY_CONFIG.name;
+  const summaryText = buildWhatsAppSummaryText(quotation, profile);
 
   try {
-    if (navigator.share && targetElement) {
-      const result = await generateQuotationPdf(targetElement);
-      if (result?.blob) {
-        const file = new File(
-          [result.blob],
-          `Quotation_${quoteNo}.pdf`,
-          { type: 'application/pdf' }
-        );
+    const pdfResult = cachedPdfResult || (targetElement ? await generateQuotationPdf(targetElement) : null);
+    if (pdfResult?.blob) {
+      const file = new File(
+        [pdfResult.blob],
+        `Vishakha_Quotation_${quoteNo}.pdf`,
+        { type: 'application/pdf' }
+      );
 
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({
-            title: `Quotation ${quoteNo} - ${companyName}`,
-            text: summaryText,
-            files: [file]
-          });
-          return { method: 'web-share', success: true };
-        }
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          title: `Quotation ${quoteNo} - ${companyName}`,
+          text: summaryText,
+          files: [file]
+        });
+        return { method: 'web-share', success: true };
       }
     }
   } catch (err) {
@@ -143,28 +251,53 @@ export async function shareQuotationWhatsApp({ quotation, profile, targetElement
     console.warn('Web Share failed, using wa.me fallback:', err);
   }
 
-  // Fallback to wa.me link
-  const waUrl = `https://wa.me/?text=${encodeURIComponent(summaryText)}`;
-  window.open(waUrl, '_blank', 'noopener,noreferrer');
+  // Fallback to downloading PDF and opening WhatsApp
+  fallbackDownloadAndWhatsApp(summaryText, cachedPdfResult, quoteNo);
   return { method: 'wa-url', success: true };
 }
 
 /**
  * Clean Document Template Component for high-res PDF generation & print
+ * System font stack ensures 0ms latency, zero FOUT/font shifts, and 100% deterministic layout.
  */
 export const PrintableQuotationDoc = forwardRef(function PrintableQuotationDoc(
-  { quotation, profile, isOffscreen = true },
+  { quotation, profile, logoBase64, signatureBase64, isOffscreen = true },
   ref
 ) {
   if (!quotation) return null;
+
+  const [internalLogo, setInternalLogo] = useState(logoBase64 || '');
+  const [internalSig, setInternalSig] = useState(signatureBase64 || '');
+
+  // Synchronize or convert to base64 automatically
+  useEffect(() => {
+    if (logoBase64) {
+      setInternalLogo(logoBase64);
+    } else {
+      const rawLogo = profile?.logo_url || COMPANY_CONFIG.logoUrl;
+      urlToBase64(rawLogo).then((res) => {
+        if (res) setInternalLogo(res);
+      });
+    }
+  }, [logoBase64, profile?.logo_url]);
+
+  useEffect(() => {
+    if (signatureBase64) {
+      setInternalSig(signatureBase64);
+    } else if (profile?.signature_url) {
+      urlToBase64(profile.signature_url).then((res) => {
+        if (res) setInternalSig(res);
+      });
+    }
+  }, [signatureBase64, profile?.signature_url]);
 
   const companyName = profile?.name || COMPANY_CONFIG.name;
   const ownerName = profile?.owner_name || COMPANY_CONFIG.ownerName;
   const address = profile?.address || COMPANY_CONFIG.address;
   const phone = profile?.phone || COMPANY_CONFIG.phone;
   const email = profile?.email || COMPANY_CONFIG.email;
-  const logoUrl = profile?.logo_url || COMPANY_CONFIG.logoUrl;
-  const signatureUrl = profile?.signature_url || '';
+  const logoUrl = internalLogo || profile?.logo_url || COMPANY_CONFIG.logoUrl;
+  const signatureUrl = internalSig || profile?.signature_url || '';
 
   const itemsCount = quotation?.items?.length || 0;
   const emptyRowsCount = itemsCount <= 4 ? 5 - itemsCount : 0;
@@ -174,24 +307,29 @@ export const PrintableQuotationDoc = forwardRef(function PrintableQuotationDoc(
     ? {
         position: 'fixed',
         left: '-10000px',
-        top: 0,
+        top: '0px',
         width: '794px',
         height: itemsCount > 6 ? 'auto' : '1123px',
         minHeight: '1123px',
+        visibility: 'visible',
+        opacity: 1,
         transform: 'none',
-        background: '#ffffff',
+        zoom: 1,
+        backgroundColor: '#ffffff',
         zIndex: -9999,
         boxSizing: 'border-box',
         display: 'flex',
-        flexDirection: 'column'
+        flexDirection: 'column',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
       }
     : {
         width: '794px',
         minHeight: '1123px',
-        background: '#ffffff',
+        backgroundColor: '#ffffff',
         boxSizing: 'border-box',
         display: 'flex',
-        flexDirection: 'column'
+        flexDirection: 'column',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
       };
 
   return (
@@ -225,6 +363,7 @@ export const PrintableQuotationDoc = forwardRef(function PrintableQuotationDoc(
             <img
               src={logoUrl}
               alt={`${companyName} Logo`}
+              crossOrigin="anonymous"
               className="max-w-full max-h-full object-contain"
               style={{ objectFit: 'contain' }}
             />
@@ -473,6 +612,7 @@ export const PrintableQuotationDoc = forwardRef(function PrintableQuotationDoc(
             <img
               src={signatureUrl}
               alt="Authorized Signature"
+              crossOrigin="anonymous"
               className="w-full h-full object-contain"
               style={{ width: '100px', height: '48px', objectFit: 'contain' }}
             />
