@@ -150,7 +150,63 @@ export async function upsertCustomer(name, place = '') {
 
 // ----------------- QUOTATIONS -----------------
 
+function filterQuotations(list, searchQuery) {
+  if (!searchQuery || !searchQuery.trim()) return list;
+  const q = searchQuery.toLowerCase().trim();
+  return list.filter((item) => {
+    const quoteNo = (item.quote_no || '').toLowerCase();
+    const custName = (item.customers?.name || '').toLowerCase();
+    const custPlace = (item.customers?.place || '').toLowerCase();
+    return quoteNo.includes(q) || custName.includes(q) || custPlace.includes(q);
+  });
+}
+
 export async function getQuotations(searchQuery = '') {
+  // If Supabase is reachable, read ONLY from Supabase (Single source of truth)
+  if (navigator.onLine && isSupabaseConfigured && supabase) {
+    try {
+      const { data: cloudQuotes, error: qErr } = await supabase
+        .from('quotations')
+        .select('*, customers(*)')
+        .order('created_at', { ascending: false });
+
+      if (qErr) {
+        logSupabaseError('getQuotations', qErr);
+        throw qErr;
+      }
+
+      // Check for any pending unsynced offline quotations in local cache
+      let unsyncedQuotes = [];
+      try {
+        const unsynced = await db.quotations.filter((q) => q.synced === false).toArray();
+        if (unsynced.length) {
+          const allCustomers = await db.customers.toArray();
+          const customerMap = {};
+          allCustomers.forEach((c) => {
+            if (c.id) customerMap[c.id] = c;
+            if (c.localId) customerMap[String(c.localId)] = c;
+          });
+          unsyncedQuotes = unsynced.map((q) => ({
+            ...q,
+            customers: customerMap[q.customer_id] || { name: 'Customer', place: '' }
+          }));
+        }
+      } catch (e) {
+        console.warn('Error fetching unsynced quotations:', e);
+      }
+
+      const combined = [...unsyncedQuotes, ...(cloudQuotes || [])];
+
+      // Mirror fresh cloud data to Dexie cache in the background (purging deleted items)
+      syncFromSupabase().catch((e) => console.warn('[Sync] Background sync error:', e));
+
+      return filterQuotations(combined, searchQuery);
+    } catch (err) {
+      console.warn('[dataService] Supabase unreachable, reading from offline cache:', err);
+    }
+  }
+
+  // Offline fallback: read from Dexie local cache
   try {
     const [allQuotes, allCustomers] = await Promise.all([
       db.quotations.toArray(),
@@ -163,22 +219,16 @@ export async function getQuotations(searchQuery = '') {
       if (c.localId) customerMap[String(c.localId)] = c;
     });
 
-    let list = allQuotes.map((q) => ({
-      ...q,
-      customers: customerMap[q.customer_id] || { name: 'Customer', place: '' }
-    })).sort((a, b) => new Date(b.created_at || b.quote_date) - new Date(a.created_at || a.quote_date));
+    const list = allQuotes
+      .map((q) => ({
+        ...q,
+        customers: customerMap[q.customer_id] || { name: 'Customer', place: '' }
+      }))
+      .sort((a, b) => new Date(b.created_at || b.quote_date) - new Date(a.created_at || a.quote_date));
 
-    if (!searchQuery.trim()) return list;
-
-    const query = searchQuery.toLowerCase().trim();
-    return list.filter((q) => {
-      const quoteNo = (q.quote_no || '').toLowerCase();
-      const custName = (q.customers?.name || '').toLowerCase();
-      const custPlace = (q.customers?.place || '').toLowerCase();
-      return quoteNo.includes(query) || custName.includes(query) || custPlace.includes(query);
-    });
+    return filterQuotations(list, searchQuery);
   } catch (err) {
-    console.warn('[Dexie] getQuotations error:', err);
+    console.warn('[Dexie] getQuotations fallback error:', err);
     return [];
   }
 }
@@ -186,6 +236,31 @@ export async function getQuotations(searchQuery = '') {
 export async function getQuotationById(id) {
   if (!id) return null;
 
+  // If online and id is a valid UUID, read directly from Supabase
+  if (isUuid(id) && navigator.onLine && isSupabaseConfigured && supabase) {
+    try {
+      const { data: quote, error: qErr } = await supabase
+        .from('quotations')
+        .select('*, customers(*), quotation_items(*)')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (!qErr && quote) {
+        const sortedItems = (quote.quotation_items || []).sort(
+          (a, b) => (a.sl_no || 0) - (b.sl_no || 0)
+        );
+        return {
+          ...quote,
+          customers: quote.customers || { name: 'Customer', place: '' },
+          items: sortedItems
+        };
+      }
+    } catch (err) {
+      console.warn('[dataService] getQuotationById Supabase error:', err);
+    }
+  }
+
+  // Fallback to local Dexie cache
   try {
     const allQuotes = await db.quotations.toArray();
     const quotation = allQuotes.find(
@@ -194,7 +269,6 @@ export async function getQuotationById(id) {
 
     if (!quotation) return null;
 
-    // Load customer
     let customer = null;
     if (quotation.customer_id) {
       customer = await db.customers
@@ -202,7 +276,6 @@ export async function getQuotationById(id) {
         .first();
     }
 
-    // Load items
     const allItems = await db.quotation_items.toArray();
     const items = allItems
       .filter(
@@ -219,7 +292,7 @@ export async function getQuotationById(id) {
       items
     };
   } catch (err) {
-    console.warn('[Dexie] getQuotationById error:', err);
+    console.warn('[Dexie] getQuotationById fallback error:', err);
     return null;
   }
 }
@@ -242,7 +315,9 @@ export async function saveQuotation(quoteData) {
     );
   }
 
-  const quoteId = targetQuote?.id || quoteData.id || generateUuid();
+  const quoteId = targetQuote?.id && isUuid(targetQuote.id)
+    ? targetQuote.id
+    : (quoteData.id && isUuid(quoteData.id) ? quoteData.id : generateUuid());
 
   const recordPayload = {
     id: quoteId,
@@ -258,14 +333,13 @@ export async function saveQuotation(quoteData) {
     gst_amount: parseFloat(quoteData.gst_amount) || 0,
     grand_total: parseFloat(quoteData.grand_total) || 0,
     created_at: targetQuote?.created_at || new Date().toISOString(),
-    synced: false // Marked as pending sync until synced to cloud
+    synced: false
   };
 
   let assignedLocalId = targetQuote?.localId;
 
   if (targetQuote) {
     await db.quotations.update(targetQuote.localId, recordPayload);
-    // Remove existing items to overwrite with new ones
     await db.quotation_items
       .filter(
         (it) =>
@@ -279,9 +353,8 @@ export async function saveQuotation(quoteData) {
     await db.quotations.update(assignedLocalId, { localId: assignedLocalId });
   }
 
-  // 2. Add Quotation Items into Dexie
   const itemsToAdd = (quoteData.items || []).map((it, idx) => ({
-    id: it.id || generateUuid(),
+    id: it.id && isUuid(it.id) ? it.id : generateUuid(),
     quotation_id: quoteId,
     quotation_local_id: assignedLocalId,
     sl_no: it.sl_no || idx + 1,
@@ -290,7 +363,7 @@ export async function saveQuotation(quoteData) {
     qty: parseFloat(it.qty) || 1,
     price: parseFloat(it.price !== undefined ? it.price : it.rate) || 0,
     total: parseFloat(it.total !== undefined ? it.total : it.amount) || 0,
-    material_id: it.material_id || null,
+    material_id: it.material_id && isUuid(it.material_id) ? it.material_id : null,
     synced: false
   }));
 
@@ -298,31 +371,122 @@ export async function saveQuotation(quoteData) {
     await db.quotation_items.bulkAdd(itemsToAdd);
   }
 
-  const result = {
+  // If online, directly upsert quotation and items to Supabase
+  if (navigator.onLine && isSupabaseConfigured && supabase) {
+    try {
+      let cloudCustId = customerId;
+      if (customerId && !isUuid(customerId)) {
+        const cust = await db.customers.where('localId').equals(Number(customerId)).first();
+        if (cust?.id && isUuid(cust.id)) cloudCustId = cust.id;
+      }
+
+      const cloudQuotePayload = {
+        id: quoteId,
+        quote_no: recordPayload.quote_no,
+        quote_date: recordPayload.quote_date,
+        customer_id: isUuid(cloudCustId) ? cloudCustId : null,
+        greeting: recordPayload.greeting,
+        closing: recordPayload.closing,
+        grand_total: recordPayload.grand_total,
+        created_at: recordPayload.created_at
+      };
+
+      const { data: savedSbQuote, error: qErr } = await supabase
+        .from('quotations')
+        .upsert(cloudQuotePayload)
+        .select()
+        .single();
+
+      if (qErr) {
+        logSupabaseError('saveQuotation (cloud)', qErr);
+      } else if (savedSbQuote) {
+        await db.quotations.update(assignedLocalId, { synced: true });
+        recordPayload.synced = true;
+
+        // Upsert quotation_items
+        await supabase.from('quotation_items').delete().eq('quotation_id', quoteId);
+        if (itemsToAdd.length) {
+          const cloudItems = itemsToAdd.map((it) => ({
+            id: it.id,
+            quotation_id: quoteId,
+            material_id: it.material_id,
+            sl_no: it.sl_no,
+            description: it.description,
+            unit: it.unit,
+            qty: it.qty,
+            price: it.price,
+            total: it.total
+          }));
+
+          const { error: itemsErr } = await supabase.from('quotation_items').insert(cloudItems);
+          if (itemsErr) {
+            logSupabaseError('saveQuotation items (cloud)', itemsErr);
+          } else {
+            for (const it of itemsToAdd) {
+              await db.quotation_items.where('id').equals(it.id).modify({ synced: true });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[saveQuotation] Error syncing to Supabase:', err);
+    }
+  }
+
+  return {
     ...recordPayload,
     localId: assignedLocalId,
     id: quoteId,
     items: itemsToAdd
   };
-
-  // 3. If online, attempt background sync immediately
-  if (navigator.onLine && isSupabaseConfigured && supabase) {
-    syncPendingChanges().catch((e) => console.warn('[Sync] Background sync queued:', e));
-  }
-
-  return result;
 }
 
 export async function deleteQuotation(id) {
   if (!id) return { success: false, error: 'No quotation identifier provided' };
 
+  let target = null;
   try {
     const allQuotes = await db.quotations.toArray();
-    const target = allQuotes.find(
+    target = allQuotes.find(
       (q) => q.id === id || String(q.localId) === String(id)
     );
+  } catch (err) {
+    console.warn('[Dexie] deleteQuotation lookup error:', err);
+  }
 
-    if (target) {
+  const cloudId = (target && target.id && isUuid(target.id)) ? target.id : (isUuid(id) ? id : null);
+
+  // If online and quotation has a cloud UUID, delete from Supabase FIRST
+  if (cloudId && navigator.onLine && isSupabaseConfigured && supabase) {
+    try {
+      // First delete associated items from Supabase
+      await supabase.from('quotation_items').delete().eq('quotation_id', cloudId);
+
+      const { error: sbError } = await supabase.from('quotations').delete().eq('id', cloudId);
+
+      if (sbError) {
+        const code = sbError.code || 'UNKNOWN';
+        const message = sbError.message || 'Failed to delete quotation from cloud';
+        console.error(`[deleteQuotation] Supabase error: code=${code}, message=${message}`, sbError);
+        return {
+          success: false,
+          error: `Failed to delete from database: ${message} (Code: ${code})`,
+          code,
+          message
+        };
+      }
+    } catch (err) {
+      console.error('[deleteQuotation] Exception during Supabase delete:', err);
+      return {
+        success: false,
+        error: err.message || 'Network error while deleting quotation'
+      };
+    }
+  }
+
+  // Supabase delete succeeded (or offline purely local quote) -> Drop from Dexie cache
+  try {
+    if (target?.localId) {
       await db.quotations.delete(target.localId);
       await db.quotation_items
         .filter(
@@ -332,30 +496,27 @@ export async function deleteQuotation(id) {
             it.quotation_local_id === target.localId
         )
         .delete();
-
-      // If online and had a Supabase UUID, delete from cloud
-      if (target.id && isUuid(target.id) && navigator.onLine && isSupabaseConfigured && supabase) {
-        try {
-          const { error } = await supabase.from('quotations').delete().eq('id', target.id);
-          if (error) {
-            logSupabaseError('deleteQuotation', error);
-          }
-        } catch (e) {
-          console.warn('[Sync] Cloud delete failed:', e);
-        }
-      }
-      return { success: true };
+    } else if (isUuid(id)) {
+      await db.quotations.where('id').equals(id).delete();
+      await db.quotation_items.where('quotation_id').equals(id).delete();
     }
-    return { success: false, error: 'Quotation not found' };
-  } catch (err) {
-    console.warn('[Dexie] deleteQuotation error:', err);
-    return { success: false, error: err.message || 'Failed to delete quotation' };
+  } catch (dexieErr) {
+    console.warn('[Dexie] Local cache drop error:', dexieErr);
   }
+
+  return { success: true };
 }
 
 export async function getNextQuoteNo() {
   try {
-    const quotes = await db.quotations.toArray();
+    let quotes = [];
+    if (navigator.onLine && isSupabaseConfigured && supabase) {
+      const { data } = await supabase.from('quotations').select('quote_no');
+      quotes = data || [];
+    } else {
+      quotes = await db.quotations.toArray();
+    }
+
     const currentYear = new Date().getFullYear();
     const nextYearShort = String(currentYear + 1).slice(-2);
     const prefix = `VI/${currentYear}-${nextYearShort}/`;
@@ -384,18 +545,64 @@ export async function getNextQuoteNo() {
 
 // ----------------- MATERIALS -----------------
 
+function filterMaterials(list, searchQuery) {
+  if (!searchQuery || !searchQuery.trim()) {
+    return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+  const q = searchQuery.toLowerCase().trim();
+  return list
+    .filter(
+      (m) =>
+        (m.name || '').toLowerCase().includes(q) ||
+        (m.code || '').toLowerCase().includes(q)
+    )
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+
 export async function getMaterials(searchQuery = '') {
-  try {
-    const all = await db.materials.toArray();
-    if (!searchQuery.trim()) {
-      return all.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  // If Supabase is reachable, read ONLY from Supabase with is_active = true
+  if (navigator.onLine && isSupabaseConfigured && supabase) {
+    try {
+      const { data: cloudMaterials, error: mErr } = await supabase
+        .from('materials')
+        .select('*')
+        .eq('is_active', true)
+        .order('name');
+
+      if (mErr) {
+        logSupabaseError('getMaterials', mErr);
+        throw mErr;
+      }
+
+      // Check for any pending unsynced offline materials in local cache
+      let unsyncedMats = [];
+      try {
+        unsyncedMats = await db.materials
+          .filter((m) => m.synced === false && m.is_active !== false)
+          .toArray();
+      } catch (e) {
+        console.warn('Error reading unsynced materials:', e);
+      }
+
+      const combined = [...unsyncedMats, ...(cloudMaterials || [])];
+
+      // Mirror to Dexie cache in the background (drops inactive/deleted items)
+      syncFromSupabase().catch((e) => console.warn('[Sync] Background sync error:', e));
+
+      return filterMaterials(combined, searchQuery);
+    } catch (err) {
+      console.warn('[dataService] Supabase unreachable, reading materials from offline cache:', err);
     }
-    const q = searchQuery.toLowerCase().trim();
-    return all
-      .filter((m) => (m.name || '').toLowerCase().includes(q) || (m.code || '').toLowerCase().includes(q))
-      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+
+  // Offline fallback: read active materials from Dexie local cache
+  try {
+    const all = await db.materials
+      .filter((m) => m.is_active !== false)
+      .toArray();
+    return filterMaterials(all, searchQuery);
   } catch (err) {
-    console.warn('[Dexie] getMaterials error:', err);
+    console.warn('[Dexie] getMaterials fallback error:', err);
     return [];
   }
 }
@@ -406,17 +613,23 @@ export async function saveMaterial(matData) {
 
   if (isEditing) {
     const all = await db.materials.toArray();
-    target = all.find((m) => (matData.id && m.id === matData.id) || (matData.localId && m.localId === matData.localId));
+    target = all.find(
+      (m) => (matData.id && m.id === matData.id) || (matData.localId && m.localId === matData.localId)
+    );
   }
 
+  const matId = target?.id && isUuid(target.id)
+    ? target.id
+    : (matData.id && isUuid(matData.id) ? matData.id : generateUuid());
+
   const payload = {
-    id: target?.id || matData.id || generateUuid(),
+    id: matId,
     name: matData.name,
     code: matData.code || '',
     unit: matData.unit || 'Nos',
     rate: parseFloat(matData.rate) || 0,
     description: matData.description || '',
-    is_active: matData.is_active !== false,
+    is_active: true,
     synced: false
   };
 
@@ -428,8 +641,32 @@ export async function saveMaterial(matData) {
     payload.localId = localId;
   }
 
+  // If online, directly upsert to Supabase
   if (navigator.onLine && isSupabaseConfigured && supabase) {
-    syncPendingChanges().catch((e) => console.warn('[Sync] Material sync failed:', e));
+    try {
+      const { data: savedSbMat, error: sbError } = await supabase
+        .from('materials')
+        .upsert({
+          id: payload.id,
+          name: payload.name,
+          code: payload.code,
+          unit: payload.unit,
+          rate: payload.rate,
+          description: payload.description,
+          is_active: true
+        })
+        .select()
+        .single();
+
+      if (sbError) {
+        logSupabaseError('saveMaterial (cloud)', sbError);
+      } else if (savedSbMat) {
+        payload.synced = true;
+        await db.materials.update(payload.localId, { synced: true });
+      }
+    } catch (err) {
+      console.warn('[saveMaterial] Error syncing to Supabase:', err);
+    }
   }
 
   return payload;
@@ -438,92 +675,68 @@ export async function saveMaterial(matData) {
 export async function deleteMaterial(identifier) {
   if (!identifier) return { success: false, error: 'No material identifier provided' };
 
+  let target = null;
+  const targetId = typeof identifier === 'object' ? (identifier.id || identifier.localId) : identifier;
+
   try {
     const all = await db.materials.toArray();
-    const target = all.find(
+    target = all.find(
       (m) =>
-        (m.id && m.id === identifier) ||
-        (m.localId && String(m.localId) === String(identifier)) ||
+        (m.id && m.id === targetId) ||
+        (m.localId && String(m.localId) === String(targetId)) ||
         (typeof identifier === 'object' &&
           ((identifier.id && m.id === identifier.id) ||
             (identifier.localId && m.localId === identifier.localId)))
     );
+  } catch (e) {
+    console.warn('[Dexie] Error finding material for deletion:', e);
+  }
 
-    if (!target) {
-      console.warn('[Dexie] Material not found for deletion:', identifier);
-      return { success: false, error: 'Material not found' };
-    }
+  const cloudId = (target && target.id && isUuid(target.id)) ? target.id : (isUuid(targetId) ? targetId : null);
 
-    // 1. Unlink any local Dexie quotation items referencing this material
+  // Soft delete (is_active = false) in Supabase if online
+  if (cloudId && navigator.onLine && isSupabaseConfigured && supabase) {
     try {
-      await db.quotation_items
-        .filter(
-          (it) =>
-            it.material_id === target.id ||
-            String(it.material_id) === String(target.localId)
-        )
-        .modify({ material_id: null });
-    } catch (e) {
-      console.warn('[Dexie] Could not unlink local quotation_items:', e);
-    }
-
-    // 2. If online and Supabase is configured and material has a cloud UUID
-    if (target.id && isUuid(target.id) && navigator.onLine && isSupabaseConfigured && supabase) {
-      // First attempt to delete directly from Supabase
-      const { error: sbError } = await supabase.from('materials').delete().eq('id', target.id);
+      const { error: sbError } = await supabase
+        .from('materials')
+        .update({ is_active: false })
+        .eq('id', cloudId);
 
       if (sbError) {
-        logSupabaseError('deleteMaterial', sbError);
-
-        // If foreign key constraint violation (Postgres error 23503)
-        if (
-          sbError.code === '23503' ||
-          sbError.message?.toLowerCase().includes('foreign key') ||
-          sbError.details?.toLowerCase().includes('foreign key')
-        ) {
-          try {
-            // Unlink quotation_items in Supabase so past quotations remain intact
-            console.log('[Supabase] Unlinking material from quotation_items to resolve foreign key...');
-            const { error: unlinkErr } = await supabase
-              .from('quotation_items')
-              .update({ material_id: null })
-              .eq('material_id', target.id);
-
-            if (!unlinkErr) {
-              // Retry delete after unlinking
-              const { error: retryErr } = await supabase.from('materials').delete().eq('id', target.id);
-              if (retryErr) {
-                return {
-                  success: false,
-                  error: 'This material is used in existing quotations and cannot be deleted.'
-                };
-              }
-            } else {
-              return {
-                success: false,
-                error: 'This material is used in existing quotations and cannot be deleted.'
-              };
-            }
-          } catch (unlinkException) {
-            return {
-              success: false,
-              error: 'This material is used in existing quotations and cannot be deleted.'
-            };
-          }
-        } else {
-          return {
-            success: false,
-            error: sbError.message || 'Failed to delete from database'
-          };
-        }
+        const code = sbError.code || 'UNKNOWN';
+        const message = sbError.message || 'Failed to soft delete material';
+        console.error(`[deleteMaterial] Supabase error: code=${code}, message=${message}`, sbError);
+        return {
+          success: false,
+          error: `Failed to delete material: ${message} (Code: ${code})`,
+          code,
+          message
+        };
       }
+    } catch (err) {
+      console.error('[deleteMaterial] Supabase soft delete exception:', err);
+      return {
+        success: false,
+        error: err.message || 'Network error while deleting material'
+      };
+    }
+  }
+
+  // Drop from local Dexie cache (Requirement 4: local cache also drops the item)
+  try {
+    if (target?.localId) {
+      await db.materials.delete(target.localId);
+    } else if (isUuid(targetId)) {
+      await db.materials.where('id').equals(targetId).delete();
     }
 
-    // 3. Delete from Dexie local database
-    await db.materials.delete(target.localId);
-    return { success: true };
-  } catch (err) {
-    console.error('[deleteMaterial] Error deleting material:', err);
-    return { success: false, error: err.message || 'Failed to delete material' };
+    // Unlink any local Dexie quotation items referencing this material
+    await db.quotation_items
+      .filter((it) => it.material_id === cloudId || String(it.material_id) === String(targetId))
+      .modify({ material_id: null });
+  } catch (dexieErr) {
+    console.warn('[Dexie] Error dropping material from local cache:', dexieErr);
   }
+
+  return { success: true };
 }

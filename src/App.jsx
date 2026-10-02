@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { purgeInvalidLocalRecords } from './db/localDb';
 import LoginPage from './pages/LoginPage';
 import QuotationListPage from './pages/QuotationListPage';
 import CreateEditQuotationPage from './pages/CreateEditQuotationPage';
@@ -43,6 +44,11 @@ function PublicRoute({ children }) {
 }
 
 export default function App() {
+  useEffect(() => {
+    // One-time migration: on app start, purge any local records whose id is not a valid UUID
+    purgeInvalidLocalRecords();
+  }, []);
+
   return (
     <ThemeProvider>
       <AuthProvider>

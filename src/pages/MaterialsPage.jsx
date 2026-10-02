@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { getMaterials, saveMaterial, deleteMaterial } from '../services/dataService';
 import Header from '../components/Header';
 import Sidebar from '../components/Sidebar';
@@ -44,19 +43,33 @@ const cardVariants = {
 export default function MaterialsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [toast, setToast] = useState(null); // { message: '', type: 'success' | 'error' }
+  const [materials, setMaterials] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  // Reactive Dexie query - automatically reflects additions, edits, and deletions
-  const liveMaterials = useLiveQuery(async () => {
+  // Fetch materials from Supabase (single source of truth when online)
+  const fetchMaterials = useCallback(async () => {
     try {
-      return await getMaterials(searchQuery);
+      const data = await getMaterials(searchQuery);
+      setMaterials(data || []);
     } catch (e) {
-      console.warn('[Dexie] liveMaterials query error:', e);
-      return [];
+      console.warn('Error fetching materials:', e);
+    } finally {
+      setLoading(false);
     }
   }, [searchQuery]);
 
-  const materials = liveMaterials || [];
-  const loading = liveMaterials === undefined;
+  useEffect(() => {
+    fetchMaterials();
+  }, [fetchMaterials]);
+
+  // Re-fetch when connection restored
+  useEffect(() => {
+    const handleOnline = () => {
+      fetchMaterials();
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [fetchMaterials]);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -154,6 +167,7 @@ export default function MaterialsPage() {
         'success'
       );
       handleCloseModal();
+      await fetchMaterials();
     } catch (err) {
       setFormError(err.message || 'Failed to save material');
     } finally {
@@ -170,6 +184,7 @@ export default function MaterialsPage() {
       if (res && res.success) {
         showNotification(`Deleted "${materialToDelete.name}"`, 'success');
         setMaterialToDelete(null);
+        await fetchMaterials();
       } else {
         showNotification(res?.error || 'Failed to delete material', 'error');
       }

@@ -25,233 +25,78 @@ export function generateOfflineUuid() {
   });
 }
 
-// ----------------- DEFAULT SEED DATA -----------------
-const DEFAULT_COMPANY_PROFILE = {
-  id: 'd0000000-0000-4000-8000-000000000001',
-  name: COMPANY_CONFIG.name,
-  owner_name: COMPANY_CONFIG.ownerName,
-  address: COMPANY_CONFIG.address,
-  phone: COMPANY_CONFIG.phone,
-  email: COMPANY_CONFIG.email,
-  logo_url: COMPANY_CONFIG.logoUrl,
-  signature_url: '',
-  default_greeting: COMPANY_CONFIG.defaultGreeting,
-  default_closing: COMPANY_CONFIG.defaultClosing,
-  synced: true
-};
-
-const DEFAULT_CUSTOMERS = [
-  { id: 'c1000000-0000-4000-8000-000000000001', name: 'Apex Engineering Works', place: 'Coimbatore', synced: true },
-  { id: 'c2000000-0000-4000-8000-000000000002', name: 'Premier Precision Tools', place: 'Tirupur', synced: true },
-  { id: 'c3000000-0000-4000-8000-000000000003', name: 'Sterling Machinery Corp', place: 'Erode', synced: true }
-];
-
-const DEFAULT_MATERIALS = [
-  {
-    id: 'a0000000-0000-4000-8000-000000000001',
-    name: 'Industrial Hydraulic Valve 25mm (High Pressure)',
-    code: '8481',
-    unit: 'Nos',
-    rate: 7500,
-    description: 'High pressure 25mm CNC finished hydraulic control valve',
-    is_active: true,
-    synced: true
-  },
-  {
-    id: 'a0000000-0000-4000-8000-000000000002',
-    name: 'Forged Steel Flange 150# ANSI Class',
-    code: '7307',
-    unit: 'Nos',
-    rate: 4500,
-    description: '150# ANSI class forged steel industrial connection flange',
-    is_active: true,
-    synced: true
-  },
-  {
-    id: 'a0000000-0000-4000-8000-000000000003',
-    name: 'Heavy Duty CNC Turned Component Shaft SS304',
-    code: '8483',
-    unit: 'Nos',
-    rate: 4250,
-    description: 'Precision turned SS304 transmission component shaft',
-    is_active: true,
-    synced: true
-  },
-  {
-    id: 'a0000000-0000-4000-8000-000000000004',
-    name: 'Precision Ground Bearing Housing Unit',
-    code: '8482',
-    unit: 'Nos',
-    rate: 5000,
-    description: 'Cast iron ground bearing housing unit with dust seal',
-    is_active: true,
-    synced: true
-  },
-  {
-    id: 'a0000000-0000-4000-8000-000000000005',
-    name: 'SS316 Fastener Bolt & Nut Assembly M16x60',
-    code: '7318',
-    unit: 'Set',
-    rate: 180,
-    description: 'Corrosion resistant stainless steel fastener bolt and nut assembly',
-    is_active: true,
-    synced: true
-  },
-  {
-    id: 'a0000000-0000-4000-8000-000000000006',
-    name: 'Industrial Hydraulic Fluid ISO VG 68',
-    code: '2710',
-    unit: 'Ltr',
-    rate: 320,
-    description: 'Premium anti-wear industrial hydraulic system fluid',
-    is_active: true,
-    synced: true
-  },
-  {
-    id: 'a0000000-0000-4000-8000-000000000007',
-    name: 'Heavy Duty Stainless Steel Raw Rod 50mm',
-    code: '7222',
-    unit: 'Kg',
-    rate: 380,
-    description: 'Grade 304 solid stainless steel round bar stock',
-    is_active: true,
-    synced: true
-  }
-];
-
-const DEFAULT_QUOTATIONS = [
-  {
-    id: 'e1000000-0000-4000-8000-000000000001',
-    quote_no: 'VI/2026-27/001',
-    quote_date: '2026-10-02',
-    customer_id: 'c1000000-0000-4000-8000-000000000001',
-    greeting: 'Kind Attention: Purchase Department. We thank you for your enquiry and take pleasure in submitting our competitive quotation as below:',
-    closing: 'We trust our quotation meets your valued approval and look forward to receiving your valuable purchase order.',
-    subtotal: 75000,
-    discount_percent: 5,
-    discount_amount: 3750,
-    gst_percent: 18,
-    gst_amount: 12825,
-    grand_total: 84075,
-    created_at: '2026-10-02T10:00:00.000Z',
-    synced: true
-  },
-  {
-    id: 'e2000000-0000-4000-8000-000000000002',
-    quote_no: 'VI/2026-27/002',
-    quote_date: '2026-10-02',
-    customer_id: 'c2000000-0000-4000-8000-000000000002',
-    greeting: 'Dear Sir/Madam, With reference to your technical enquiry, we are pleased to quote our best rates for the following items:',
-    closing: 'Quality inspection certificate will be provided along with delivery. Looking forward to your order.',
-    subtotal: 92700,
-    discount_percent: 0,
-    discount_amount: 0,
-    gst_percent: 18,
-    gst_amount: 16686,
-    grand_total: 109386,
-    created_at: '2026-10-02T10:15:00.000Z',
-    synced: true
-  }
-];
-
-const DEFAULT_ITEMS = [
-  {
-    id: 'b1000000-0000-4000-8000-000000000001',
-    quotation_id: 'e1000000-0000-4000-8000-000000000001',
-    sl_no: 1,
-    description: 'Industrial Hydraulic Valve 25mm (High Pressure) - CNC finished precision body with dual seal protection',
-    unit: 'Nos',
-    qty: 10,
-    price: 7500,
-    total: 75000,
-    synced: true
-  },
-  {
-    id: 'b2000000-0000-4000-8000-000000000001',
-    quotation_id: 'e2000000-0000-4000-8000-000000000002',
-    sl_no: 1,
-    description: 'Forged Steel Flange 150# ANSI Class - High tensile standard pipe connection flange',
-    unit: 'Nos',
-    qty: 4,
-    price: 4500,
-    total: 18000,
-    synced: true
-  },
-  {
-    id: 'b2000000-0000-4000-8000-000000000002',
-    quotation_id: 'e2000000-0000-4000-8000-000000000002',
-    sl_no: 2,
-    description: 'Heavy Duty CNC Turned Component Shaft SS304 - Precision engineered transmission shaft',
-    unit: 'Nos',
-    qty: 6,
-    price: 4250,
-    total: 25500,
-    synced: true
-  },
-  {
-    id: 'b2000000-0000-4000-8000-000000000003',
-    quotation_id: 'e2000000-0000-4000-8000-000000000002',
-    sl_no: 3,
-    description: 'Precision Ground Bearing Housing Unit - Cast iron with heat treated inner race',
-    unit: 'Nos',
-    qty: 5,
-    price: 5000,
-    total: 25000,
-    synced: true
-  },
-  {
-    id: 'b2000000-0000-4000-8000-000000000004',
-    quotation_id: 'e2000000-0000-4000-8000-000000000002',
-    sl_no: 4,
-    description: 'SS316 Fastener Bolt & Nut Assembly M16x60 - Grade 316 stainless hardware',
-    unit: 'Set',
-    qty: 50,
-    price: 180,
-    total: 9000,
-    synced: true
-  },
-  {
-    id: 'b2000000-0000-4000-8000-000000000005',
-    quotation_id: 'e2000000-0000-4000-8000-000000000002',
-    sl_no: 5,
-    description: 'Heavy Duty Stainless Steel Raw Rod 50mm - Grade 304 round bar stock',
-    unit: 'Kg',
-    qty: 40,
-    price: 380,
-    total: 15200,
-    synced: true
-  }
-];
-
-// ----------------- SEED INITIAL LOCAL DATA -----------------
-export async function seedInitialLocalData() {
+// ----------------- ONE-TIME MIGRATION: PURGE INVALID / SEED RECORDS -----------------
+export async function purgeInvalidLocalRecords() {
   try {
-    const custCount = await db.customers.count();
-    if (custCount === 0) {
-      await db.customers.bulkAdd(DEFAULT_CUSTOMERS);
+    // 1. Clear legacy demo keys from localStorage
+    const demoKeys = [
+      'vishakha_demo_quotations',
+      'vishakha_demo_items',
+      'vishakha_demo_materials',
+      'vishakha_demo_customers'
+    ];
+    demoKeys.forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch (e) {}
+    });
+
+    // 2. Strict UUID regex (standard 8-4-4-4-12 hex format)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    const isInvalid = (id) => {
+      if (!id || typeof id !== 'string') return true;
+      const clean = id.trim();
+      // Test regex: must be a valid standard UUID
+      if (!uuidRegex.test(clean)) return true;
+      // Also reject known seed pattern IDs (e.g., a0000000-..., b1000000-..., c1000000-..., e1000000-...)
+      if (/^[a-e][0-9]000000-0000-4000-8000-[0-9]{12}$/i.test(clean)) return true;
+      return false;
+    };
+
+    // Purge invalid quotations
+    const quotes = await db.quotations.toArray();
+    for (const q of quotes) {
+      if (isInvalid(q.id)) {
+        console.log('[Migration] Purging invalid/seed local quotation:', q.id || q.localId);
+        await db.quotations.delete(q.localId);
+      }
     }
 
-    const matCount = await db.materials.count();
-    if (matCount === 0) {
-      await db.materials.bulkAdd(DEFAULT_MATERIALS);
+    // Purge invalid quotation items
+    const items = await db.quotation_items.toArray();
+    for (const item of items) {
+      if (isInvalid(item.id) || (item.quotation_id && isInvalid(item.quotation_id))) {
+        console.log('[Migration] Purging invalid/seed local quotation item:', item.id || item.localId);
+        await db.quotation_items.delete(item.localId);
+      }
     }
 
-    const profCount = await db.company_profile.count();
-    if (profCount === 0) {
-      await db.company_profile.add(DEFAULT_COMPANY_PROFILE);
+    // Purge invalid materials
+    const materials = await db.materials.toArray();
+    for (const mat of materials) {
+      if (isInvalid(mat.id)) {
+        console.log('[Migration] Purging invalid/seed local material:', mat.name, mat.id || mat.localId);
+        await db.materials.delete(mat.localId);
+      }
     }
 
-    const quoteCount = await db.quotations.count();
-    if (quoteCount === 0) {
-      await db.quotations.bulkAdd(DEFAULT_QUOTATIONS);
-      await db.quotation_items.bulkAdd(DEFAULT_ITEMS);
+    // Purge invalid customers
+    const customers = await db.customers.toArray();
+    for (const cust of customers) {
+      if (isInvalid(cust.id)) {
+        console.log('[Migration] Purging invalid/seed local customer:', cust.name, cust.id || cust.localId);
+        await db.customers.delete(cust.localId);
+      }
     }
+
+    console.log('[Migration] Invalid local records checked/purged.');
   } catch (err) {
-    console.warn('[Dexie] Error during initial seeding:', err);
+    console.warn('[Migration] Error purging invalid local records:', err);
   }
 }
 
-// ----------------- INITIAL SYNC (ONLINE -> LOCAL DEXIE) -----------------
+// ----------------- SYNC FROM SUPABASE (MIRROR CLOUD AS SOURCE OF TRUTH) -----------------
 export async function syncFromSupabase() {
   if (!isSupabaseConfigured || !supabase || !navigator.onLine) {
     return;
@@ -262,7 +107,14 @@ export async function syncFromSupabase() {
 
     // 1. Fetch Customers
     const { data: remoteCustomers, error: cErr } = await supabase.from('customers').select('*');
-    if (!cErr && remoteCustomers?.length) {
+    if (!cErr && remoteCustomers !== null) {
+      const remoteCustIdSet = new Set(remoteCustomers.map((c) => c.id));
+      const localSyncedCusts = await db.customers.filter((c) => c.synced !== false).toArray();
+      for (const lc of localSyncedCusts) {
+        if (!remoteCustIdSet.has(lc.id)) {
+          await db.customers.delete(lc.localId);
+        }
+      }
       for (const rc of remoteCustomers) {
         const local = await db.customers.where('id').equals(rc.id).first();
         if (local) {
@@ -273,9 +125,21 @@ export async function syncFromSupabase() {
       }
     }
 
-    // 2. Fetch Materials
-    const { data: remoteMaterials, error: mErr } = await supabase.from('materials').select('*');
-    if (!mErr && remoteMaterials?.length) {
+    // 2. Fetch Active Materials (soft delete is_active = true)
+    const { data: remoteMaterials, error: mErr } = await supabase
+      .from('materials')
+      .select('*')
+      .eq('is_active', true);
+
+    if (!mErr && remoteMaterials !== null) {
+      const remoteMatIdSet = new Set(remoteMaterials.map((m) => m.id));
+      const localSyncedMats = await db.materials.filter((m) => m.synced !== false).toArray();
+      for (const lm of localSyncedMats) {
+        // Drop items that are no longer active or present in Supabase
+        if (!remoteMatIdSet.has(lm.id)) {
+          await db.materials.delete(lm.localId);
+        }
+      }
       for (const rm of remoteMaterials) {
         const local = await db.materials.where('id').equals(rm.id).first();
         if (local) {
@@ -298,12 +162,22 @@ export async function syncFromSupabase() {
     }
 
     // 4. Fetch Quotations
-    const { data: remoteQuotations, error: qErr } = await supabase.from('quotations').select('*');
-    if (!qErr && remoteQuotations?.length) {
+    const { data: remoteQuotations, error: qErr } = await supabase
+      .from('quotations')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (!qErr && remoteQuotations !== null) {
+      const remoteQuoteIdSet = new Set(remoteQuotations.map((q) => q.id));
+      const localSyncedQuotes = await db.quotations.filter((q) => q.synced !== false).toArray();
+      for (const lq of localSyncedQuotes) {
+        if (!remoteQuoteIdSet.has(lq.id)) {
+          await db.quotations.delete(lq.localId);
+        }
+      }
       for (const rq of remoteQuotations) {
         const local = await db.quotations.where('id').equals(rq.id).first();
         if (local) {
-          // If local has pending edits, do not overwrite with stale cloud data
           if (local.synced !== false) {
             await db.quotations.update(local.localId, { ...rq, synced: true });
           }
@@ -315,7 +189,14 @@ export async function syncFromSupabase() {
 
     // 5. Fetch Quotation Items
     const { data: remoteItems, error: iErr } = await supabase.from('quotation_items').select('*');
-    if (!iErr && remoteItems?.length) {
+    if (!iErr && remoteItems !== null) {
+      const remoteItemIdSet = new Set(remoteItems.map((i) => i.id));
+      const localSyncedItems = await db.quotation_items.filter((i) => i.synced !== false).toArray();
+      for (const li of localSyncedItems) {
+        if (!remoteItemIdSet.has(li.id)) {
+          await db.quotation_items.delete(li.localId);
+        }
+      }
       for (const ri of remoteItems) {
         const local = await db.quotation_items.where('id').equals(ri.id).first();
         if (local) {
@@ -519,8 +400,8 @@ if (typeof window !== 'undefined') {
   });
 }
 
-// Initialize immediately
-seedInitialLocalData().then(() => {
+// Initialize immediately: run purge migration, then mirror from Supabase
+purgeInvalidLocalRecords().then(() => {
   if (typeof navigator !== 'undefined' && navigator.onLine) {
     syncFromSupabase();
   }

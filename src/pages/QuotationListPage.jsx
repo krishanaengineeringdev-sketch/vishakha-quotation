@@ -1,9 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, syncPendingChanges, syncFromSupabase } from '../db/localDb';
-import { getQuotationById, getCompanyProfile, deleteQuotation } from '../services/dataService';
+import { syncPendingChanges, syncFromSupabase } from '../db/localDb';
+import { getQuotations, getQuotationById, getCompanyProfile, deleteQuotation } from '../services/dataService';
 import {
   PrintableQuotationDoc,
   generateQuotationPdf,
@@ -52,6 +51,8 @@ export default function QuotationListPage() {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [quotations, setQuotations] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   // Quick Action States
   const [quoteToDelete, setQuoteToDelete] = useState(null);
@@ -61,44 +62,30 @@ export default function QuotationListPage() {
   const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' }
   const offscreenDocRef = useRef(null);
 
-  // Reactive Dexie query - automatically updates UI whenever local records change or sync
-  const liveQuotations = useLiveQuery(async () => {
+  // Fetch quotations from Supabase (single source of truth when online)
+  const fetchQuotations = useCallback(async () => {
     try {
-      const [allQuotes, allCustomers] = await Promise.all([
-        db.quotations.toArray(),
-        db.customers.toArray()
-      ]);
-
-      const customerMap = {};
-      allCustomers.forEach((c) => {
-        if (c.id) customerMap[c.id] = c;
-        if (c.localId) customerMap[String(c.localId)] = c;
-      });
-
-      let list = allQuotes
-        .map((q) => ({
-          ...q,
-          customers: customerMap[q.customer_id] || { name: 'Customer', place: '' }
-        }))
-        .sort((a, b) => new Date(b.created_at || b.quote_date) - new Date(a.created_at || a.quote_date));
-
-      if (!searchQuery.trim()) return list;
-
-      const query = searchQuery.toLowerCase().trim();
-      return list.filter((q) => {
-        const quoteNo = (q.quote_no || '').toLowerCase();
-        const custName = (q.customers?.name || '').toLowerCase();
-        const custPlace = (q.customers?.place || '').toLowerCase();
-        return quoteNo.includes(query) || custName.includes(query) || custPlace.includes(query);
-      });
+      const data = await getQuotations(searchQuery);
+      setQuotations(data || []);
     } catch (e) {
-      console.warn('[Dexie] liveQuotations query error:', e);
-      return [];
+      console.warn('Error fetching quotations:', e);
+    } finally {
+      setLoading(false);
     }
   }, [searchQuery]);
 
-  const quotations = liveQuotations || [];
-  const loading = liveQuotations === undefined;
+  useEffect(() => {
+    fetchQuotations();
+  }, [fetchQuotations]);
+
+  // Re-fetch when connection restored
+  useEffect(() => {
+    const handleOnline = () => {
+      fetchQuotations();
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [fetchQuotations]);
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
@@ -111,6 +98,7 @@ export default function QuotationListPage() {
       await syncPendingChanges();
       await syncFromSupabase();
     }
+    await fetchQuotations();
     setIsRefreshing(false);
   };
 
@@ -235,6 +223,7 @@ export default function QuotationListPage() {
       if (res?.success) {
         showToast(`Deleted ${quoteToDelete.quote_no}`, 'success');
         setQuoteToDelete(null);
+        await fetchQuotations();
       } else {
         showToast(res?.error || 'Failed to delete quotation', 'error');
       }
@@ -366,7 +355,7 @@ export default function QuotationListPage() {
             <p className="text-[13px] text-[#6B7280] dark:text-gray-400 mt-1 max-w-[280px] mx-auto">
               {searchQuery
                 ? 'Try a different customer name or quotation number.'
-                : 'Create your first commercial quotation for Vishakha Industries.'}
+                : 'Add your first quotation for Vishakha Industries.'}
             </p>
             {!searchQuery && (
               <button
@@ -374,7 +363,7 @@ export default function QuotationListPage() {
                 className="mt-4 inline-flex items-center gap-2 bg-[#2F6FED] text-white px-4 py-2.5 rounded-[10px] text-[14px] font-semibold hover:bg-blue-600 hover:scale-[1.02] active:scale-95 hover:shadow-md transition-all duration-150 min-touch cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
-                <span>Create Quotation</span>
+                <span>Add Your First Quotation</span>
               </button>
             )}
           </div>
