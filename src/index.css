@@ -1,0 +1,287 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --color-bg: #FFFFFF;
+    --color-text: #0B1B3F;
+    --color-accent: #2F6FED;
+    --color-card: #F3F5F9;
+    --color-muted: #6B7280;
+  }
+
+  .dark {
+    --color-bg: #0B1220;
+    --color-text: #FFFFFF;
+    --color-card: #1A2332;
+    --color-muted: #9CA3AF;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #FFFFFF;
+    color: #0B1B3F;
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  body, #root, aside, nav, header, main, section {
+    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+  }
+
+  .dark body {
+    background-color: #0B1220;
+    color: #FFFFFF;
+  }
+
+  input, select, textarea {
+    transition: border-color 0.15s ease, background-color 0.2s ease, box-shadow 0.15s ease;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: #0B1B3F;
+    font-weight: 700;
+    transition: color 0.3s ease;
+  }
+
+  .dark h1, .dark h2, .dark h3, .dark h4, .dark h5, .dark h6 {
+    color: #FFFFFF;
+  }
+}
+
+/* Touch target helpers */
+.min-touch {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Custom Scrollbar for sleek mobile look */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #F3F5F9;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+/* Single-page A4 Paper and Print Optimizations */
+.a4-paper,
+.document-card,
+.document-page,
+#printable-quotation,
+#offscreen-printable-quotation {
+  width: 100%;
+  max-width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+  background: #FFFFFF !important;
+  color: #0B1B3F !important;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Ensure document preview and PDF ALWAYS remain in light mode regardless of theme setting */
+.dark .a4-paper,
+.dark .document-card,
+.dark .document-page,
+.dark #printable-quotation,
+.dark #offscreen-printable-quotation {
+  background-color: #FFFFFF !important;
+  color: #0B1B3F !important;
+}
+
+.dark .a4-paper *,
+.dark .document-card *,
+.dark #printable-quotation *,
+.dark #offscreen-printable-quotation * {
+  color-scheme: light;
+}
+
+.dark .a4-paper h1, .dark .document-card h1, .dark #printable-quotation h1, .dark #offscreen-printable-quotation h1,
+.dark .a4-paper h2, .dark .document-card h2, .dark #printable-quotation h2, .dark #offscreen-printable-quotation h2,
+.dark .a4-paper h3, .dark .document-card h3, .dark #printable-quotation h3, .dark #offscreen-printable-quotation h3,
+.dark .a4-paper h4, .dark .document-card h4, .dark #printable-quotation h4, .dark #offscreen-printable-quotation h4 {
+  color: #0B1B3F !important;
+}
+
+.dark .a4-paper th, .dark .document-card th, .dark #printable-quotation th, .dark #offscreen-printable-quotation th {
+  color: #0B1B3F !important;
+  background-color: #F8FAFC !important;
+}
+
+.dark .a4-paper td, .dark .document-card td, .dark #printable-quotation td, .dark #offscreen-printable-quotation td {
+  color: #0B1B3F !important;
+}
+
+.dark .a4-paper .text-\[\#6B7280\],
+.dark .document-card .text-\[\#6B7280\],
+.dark #printable-quotation .text-\[\#6B7280\],
+.dark #offscreen-printable-quotation .text-\[\#6B7280\] {
+  color: #6B7280 !important;
+}
+
+/* Custom GST Dropdown Styling */
+.gst-dropdown-menu {
+  background: #FFFFFF;
+  border: 1px solid #E2E5EA;
+  border-radius: 10px;
+  color: #0B1B3F;
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  z-index: 50;
+}
+
+.dark .gst-dropdown-menu {
+  background: #1A2332; /* dark card background */
+  border: 1px solid #2D3B52;
+  border-radius: 10px;
+  color: white;
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.gst-dropdown-option {
+  padding: 10px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.gst-dropdown-option:hover,
+.gst-dropdown-option.selected {
+  background: #2F6FED !important;
+  color: white !important;
+}
+
+.header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  overflow: hidden; /* prevent child overflow from breaking layout */
+  box-sizing: border-box;
+}
+
+.header-text-col {
+  flex: 1 1 0% !important;
+  min-width: 0 !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+.quotation-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  background-color: #2F6FED;
+  color: #FFFFFF;
+  border-radius: 6px;
+  text-transform: uppercase;
+  max-width: fit-content;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+@media (min-width: 640px) {
+  .quotation-badge {
+    padding: 6px 14px;
+    font-size: 14px;
+  }
+}
+
+/* Line Items Desktop Grid & Action Rows */
+@media (min-width: 1024px) {
+  .item-row-grid {
+    display: grid;
+    grid-template-columns: 32px 1fr 90px 110px 100px 90px 24px;
+    gap: 8px;
+    align-items: center;
+  }
+}
+
+.item-actions-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm 10mm;
+  }
+
+  html, body, #root {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #FFFFFF !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    width: 100% !important;
+    overflow: visible !important;
+  }
+
+  .print-hidden,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .a4-paper,
+  .document-card,
+  .document-page {
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 275mm !important;
+    display: flex !important;
+    flex-direction: column !important;
+    page-break-after: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .quotation-badge {
+    padding: 4px 12px !important;
+    font-size: 13px !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  table {
+    page-break-inside: avoid !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+  }
+}
