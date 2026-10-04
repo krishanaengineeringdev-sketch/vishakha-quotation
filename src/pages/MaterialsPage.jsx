@@ -5,6 +5,7 @@ import {
   getMaterialsLocal,
   saveMaterial,
   deleteMaterial,
+  deleteMaterialsBulk,
   updateMaterialStock,
   getMaterialCategories,
   getMaterialCategoriesLocal,
@@ -32,7 +33,8 @@ import {
   Upload,
   Image as ImageIcon,
   FolderPlus,
-  ChevronDown
+  ChevronDown,
+  CheckSquare
 } from 'lucide-react';
 
 const STANDARD_UNITS = ['Nos', 'Kg', 'Meter', 'Sq.ft', 'Set', 'Ltr', 'Box', 'Custom'];
@@ -139,6 +141,14 @@ export default function MaterialsPage() {
   // Delete Confirm State
   const [deletingId, setDeletingId] = useState(null);
   const [materialToDelete, setMaterialToDelete] = useState(null);
+
+  // Multi-Select & Bulk Delete State
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedMaterialIds, setSelectedMaterialIds] = useState(new Set());
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const longPressTimerRef = useRef(null);
+  const isLongPressTriggeredRef = useRef(false);
 
   // Fetch categories: Instant local render + background Supabase sync
   const fetchCategories = useCallback(async () => {
@@ -697,6 +707,106 @@ export default function MaterialsPage() {
     }
   };
 
+  // Multi-Select Handlers
+  const toggleSelectMode = () => {
+    if (isSelectMode) {
+      setIsSelectMode(false);
+      setSelectedMaterialIds(new Set());
+    } else {
+      setIsSelectMode(true);
+    }
+  };
+
+  const toggleSelectMaterial = (id) => {
+    setSelectedMaterialIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const isAllVisibleSelected =
+    materials.length > 0 &&
+    materials.every((m) => selectedMaterialIds.has(m.id || m.localId));
+
+  const handleSelectAllVisible = () => {
+    if (isAllVisibleSelected) {
+      setSelectedMaterialIds(new Set());
+    } else {
+      const next = new Set(selectedMaterialIds);
+      materials.forEach((m) => next.add(m.id || m.localId));
+      setSelectedMaterialIds(next);
+    }
+  };
+
+  const handleCardTouchStart = (id) => {
+    isLongPressTriggeredRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      isLongPressTriggeredRef.current = true;
+      if (!isSelectMode) {
+        setIsSelectMode(true);
+      }
+      setSelectedMaterialIds((prev) => {
+        const next = new Set(prev);
+        next.add(id);
+        return next;
+      });
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate(40);
+      }
+    }, 450);
+  };
+
+  const handleCardTouchEnd = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handleCardClick = (mat) => {
+    if (isLongPressTriggeredRef.current) {
+      isLongPressTriggeredRef.current = false;
+      return;
+    }
+    const identifier = mat.id || mat.localId;
+    if (isSelectMode) {
+      toggleSelectMaterial(identifier);
+    } else {
+      handleOpenEdit(mat);
+    }
+  };
+
+  const confirmBulkDelete = async () => {
+    if (selectedMaterialIds.size === 0) return;
+    setIsBulkDeleting(true);
+    const idsToDelete = Array.from(selectedMaterialIds);
+    try {
+      const res = await deleteMaterialsBulk(idsToDelete);
+      const count = res?.count ?? idsToDelete.length;
+      showNotification(`${count} ${count === 1 ? 'material' : 'materials'} deleted`, 'success');
+
+      // Optimistic UI update: immediately drop from allMaterials state
+      setAllMaterials((prev) =>
+        prev.filter((m) => !selectedMaterialIds.has(m.id) && !selectedMaterialIds.has(m.localId))
+      );
+      setSelectedMaterialIds(new Set());
+      setIsSelectMode(false);
+      setIsBulkDeleteModalOpen(false);
+
+      fetchMaterials();
+    } catch (err) {
+      console.error('Bulk delete materials error:', err);
+      showNotification('Failed to delete selected materials', 'error');
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -760,6 +870,22 @@ export default function MaterialsPage() {
                 </button>
               )}
             </div>
+
+            {/* Select Mode Toggle */}
+            <button
+              type="button"
+              onClick={toggleSelectMode}
+              className={`inline-flex items-center gap-1.5 h-10 px-3 rounded-[10px] text-[13px] font-semibold transition-all duration-150 shrink-0 cursor-pointer min-touch ${
+                isSelectMode
+                  ? 'bg-[#2F6FED] text-white shadow-xs'
+                  : 'bg-[#F3F5F9] dark:bg-[#1A2332] text-[#0B1B3F] dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700/80 border border-slate-200/80 dark:border-gray-700'
+              }`}
+              title={isSelectMode ? 'Exit select mode' : 'Select materials for bulk action'}
+              aria-label={isSelectMode ? 'Exit select mode' : 'Select materials'}
+            >
+              <CheckSquare className="w-4 h-4" />
+              <span className="hidden xs:inline">{isSelectMode ? 'Done' : 'Select'}</span>
+            </button>
 
             {/* Desktop + Add Material Button */}
             <button
@@ -985,219 +1111,360 @@ export default function MaterialsPage() {
             animate="show"
             className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3.5"
           >
-            {materials.map((mat) => (
-              <motion.div
-                key={mat.id || mat.localId}
-                variants={cardVariants}
-                whileTap={{ scale: 0.99 }}
-                role="button"
-                tabIndex={0}
-                onClick={() => handleOpenEdit(mat)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleOpenEdit(mat);
-                  }
-                }}
-                className="bg-[#F3F5F9] dark:bg-[#1A2332] hover:bg-slate-100/90 dark:hover:bg-[#202C3F] border border-slate-200/80 dark:border-gray-800 rounded-[12px] p-3.5 transition-all duration-200 shadow-xs hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300 dark:hover:border-gray-700 flex flex-col justify-between cursor-pointer select-none"
-              >
-                <div>
-                  <div className="flex items-start gap-3">
-                    {/* 40x40px Material Thumbnail with graceful fallback */}
-                    <MaterialThumbnail src={mat.image_url} alt={mat.name} />
+            {materials.map((mat) => {
+              const identifier = mat.id || mat.localId;
+              const isSelected =
+                selectedMaterialIds.has(identifier) ||
+                (mat.id && selectedMaterialIds.has(mat.id)) ||
+                (mat.localId && selectedMaterialIds.has(mat.localId));
 
-                    {/* Material Info */}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center flex-wrap gap-1.5 mb-1">
-                        <h3 className="text-[15px] font-bold text-[#0B1B3F] dark:text-white leading-snug break-words">
-                          {mat.name}
-                        </h3>
-                        {(() => {
-                          const catName = categories.find((c) => c.id === mat.category_id)?.name || mat.category;
-                          if (catName) {
-                            return (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/60 text-[#2F6FED] border border-blue-200/60 dark:border-blue-900/60">
-                                <Tag className="w-2.5 h-2.5" />
-                                <span>{catName}</span>
-                              </span>
-                            );
-                          }
-                          return (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-[#6B7280] dark:text-gray-400">
-                              <span>Uncategorized</span>
-                            </span>
-                          );
-                        })()}
-                        {(mat.code || mat.hsn) && (
-                          <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-[#6B7280] dark:text-gray-400">
-                            <Hash className="w-2.5 h-2.5" />
-                            <span>Code: {mat.code || mat.hsn}</span>
-                          </span>
-                        )}
-                      </div>
-
-                      {mat.description && (
-                        <p className="text-[12px] text-[#6B7280] dark:text-gray-400 line-clamp-2 leading-relaxed mb-2">
-                          {mat.description}
-                        </p>
+              return (
+                <motion.div
+                  key={identifier}
+                  variants={cardVariants}
+                  whileTap={{ scale: 0.99 }}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleCardClick(mat)}
+                  onTouchStart={() => handleCardTouchStart(identifier)}
+                  onTouchEnd={handleCardTouchEnd}
+                  onTouchMove={handleCardTouchEnd}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleCardClick(mat);
+                    }
+                  }}
+                  className={`border rounded-[12px] p-3.5 transition-all duration-200 shadow-xs flex flex-col justify-between cursor-pointer select-none ${
+                    isSelected
+                      ? 'bg-blue-50/70 dark:bg-blue-950/30 border-[#2F6FED] ring-2 ring-[#2F6FED]/25 dark:ring-[#2F6FED]/40'
+                      : 'bg-[#F3F5F9] dark:bg-[#1A2332] hover:bg-slate-100/90 dark:hover:bg-[#202C3F] border border-slate-200/80 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 hover:shadow-md hover:-translate-y-0.5'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-start gap-3">
+                      {/* Checkbox when in select mode (top-left) */}
+                      {isSelectMode && (
+                        <div
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSelectMaterial(identifier);
+                          }}
+                          className={`w-5 h-5 mt-2 rounded-[6px] border flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#2F6FED] border-[#2F6FED] text-white shadow-xs'
+                              : 'bg-white dark:bg-[#0B1220] border-slate-300 dark:border-gray-600 hover:border-[#2F6FED]'
+                          }`}
+                        >
+                          {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                        </div>
                       )}
 
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="text-[14px] font-extrabold text-[#2F6FED]">
-                          {formatIndianCurrency(mat.rate)}
-                        </span>
-                        <span className="text-[12px] font-medium text-[#6B7280] dark:text-gray-400">
-                          / {mat.unit || 'Nos'}
-                        </span>
-                      </div>
-                    </div>
+                      {/* 40x40px Material Thumbnail with graceful fallback */}
+                      <MaterialThumbnail src={mat.image_url} alt={mat.name} />
 
-                    {/* Actions */}
-                    <div className="flex items-center gap-1 shrink-0 pt-0.5">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleOpenEdit(mat);
-                        }}
-                        className="w-8 h-8 rounded-[8px] bg-white dark:bg-[#0B1220] border border-slate-200 dark:border-gray-700 hover:border-[#2F6FED] hover:text-[#2F6FED] text-[#6B7280] dark:text-gray-400 flex items-center justify-center hover:scale-105 active:scale-95 transition-all duration-150 min-touch cursor-pointer"
-                        title="Edit Material"
-                        aria-label="Edit"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setMaterialToDelete(mat);
-                        }}
-                        className="w-8 h-8 rounded-[8px] bg-white dark:bg-[#0B1220] border border-slate-200 dark:border-gray-700 hover:border-rose-300 hover:text-rose-600 text-[#6B7280] dark:text-gray-400 flex items-center justify-center hover:scale-105 active:scale-95 transition-all duration-150 min-touch cursor-pointer"
-                        title="Delete Material"
-                        aria-label="Delete"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                      {/* Material Info */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center flex-wrap gap-1.5 mb-1">
+                          <h3 className="text-[15px] font-bold text-[#0B1B3F] dark:text-white leading-snug break-words">
+                            {mat.name}
+                          </h3>
+                          {(() => {
+                            const catName = categories.find((c) => c.id === mat.category_id)?.name || mat.category;
+                            if (catName) {
+                              return (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/60 text-[#2F6FED] border border-blue-200/60 dark:border-blue-900/60">
+                                  <Tag className="w-2.5 h-2.5" />
+                                  <span>{catName}</span>
+                                </span>
+                              );
+                            }
+                            return (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-[#6B7280] dark:text-gray-400">
+                                <span>Uncategorized</span>
+                              </span>
+                            );
+                          })()}
+                          {(mat.code || mat.hsn) && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-[#6B7280] dark:text-gray-400">
+                              <Hash className="w-2.5 h-2.5" />
+                              <span>Code: {mat.code || mat.hsn}</span>
+                            </span>
+                          )}
+                        </div>
 
-                {/* Inventory Status & Toggle Switch Row */}
-                <div
-                  className="mt-3 pt-2.5 border-t border-slate-200/60 dark:border-gray-800 flex items-center justify-between gap-2"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="flex items-center gap-2 flex-wrap min-w-0">
-                    {/* Visual Status Indicator: Green Dot / Red Dot */}
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
-                        mat.in_stock !== false
-                          ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border-emerald-200/60 dark:border-emerald-800/60'
-                          : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400 border-rose-200/60 dark:border-rose-800/60'
-                      }`}
-                    >
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          mat.in_stock !== false ? 'bg-emerald-500' : 'bg-rose-500'
-                        }`}
-                      />
-                      <span>{mat.in_stock !== false ? 'In Stock' : 'Out of Stock'}</span>
-                    </span>
-
-                    {/* Stock Qty (Inline Editable) */}
-                    {editingStockQtyId === (mat.id || mat.localId) ? (
-                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="number"
-                          step="any"
-                          min="0"
-                          value={stockQtyInput}
-                          onChange={(e) => setStockQtyInput(e.target.value)}
-                          placeholder="Qty"
-                          autoFocus
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleSaveStockQty(mat);
-                            if (e.key === 'Escape') setEditingStockQtyId(null);
-                          }}
-                          className="w-16 px-1.5 py-0.5 bg-white dark:bg-[#0B1220] border border-[#2F6FED] rounded-[6px] text-[11px] font-medium text-[#0B1B3F] dark:text-white focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleSaveStockQty(mat)}
-                          className="w-5 h-5 flex items-center justify-center rounded bg-[#2F6FED] text-white hover:bg-blue-600 cursor-pointer"
-                          title="Save quantity"
-                        >
-                          <Check className="w-3 h-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingStockQtyId(null)}
-                          className="w-5 h-5 flex items-center justify-center rounded text-[#6B7280] hover:text-[#0B1B3F] dark:hover:text-white cursor-pointer"
-                          title="Cancel"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={(e) => handleStartEditStockQty(mat, e)}
-                        className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-[6px] bg-slate-100 dark:bg-gray-800 text-[#6B7280] dark:text-gray-300 hover:text-[#2F6FED] dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 border border-slate-200/60 dark:border-gray-700/60 transition-colors cursor-pointer"
-                        title="Click to edit stock count"
-                      >
-                        {mat.stock_qty !== undefined && mat.stock_qty !== null && mat.stock_qty !== '' ? (
-                          <span>Qty: <strong className="text-[#0B1B3F] dark:text-white">{mat.stock_qty}</strong></span>
-                        ) : (
-                          <span className="opacity-75">+ Add Qty</span>
+                        {mat.description && (
+                          <p className="text-[12px] text-[#6B7280] dark:text-gray-400 line-clamp-2 leading-relaxed mb-2">
+                            {mat.description}
+                          </p>
                         )}
-                        <Edit2 className="w-2.5 h-2.5 opacity-60" />
-                      </button>
-                    )}
+
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-[14px] font-extrabold text-[#2F6FED]">
+                            {formatIndianCurrency(mat.rate)}
+                          </span>
+                          <span className="text-[12px] font-medium text-[#6B7280] dark:text-gray-400">
+                            / {mat.unit || 'Nos'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex items-center gap-1 shrink-0 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            if (isSelectMode) {
+                              e.stopPropagation();
+                              toggleSelectMaterial(identifier);
+                              return;
+                            }
+                            e.stopPropagation();
+                            handleOpenEdit(mat);
+                          }}
+                          className="w-8 h-8 rounded-[8px] bg-white dark:bg-[#0B1220] border border-slate-200 dark:border-gray-700 hover:border-[#2F6FED] hover:text-[#2F6FED] text-[#6B7280] dark:text-gray-400 flex items-center justify-center hover:scale-105 active:scale-95 transition-all duration-150 min-touch cursor-pointer"
+                          title="Edit Material"
+                          aria-label="Edit"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            if (isSelectMode) {
+                              e.stopPropagation();
+                              toggleSelectMaterial(identifier);
+                              return;
+                            }
+                            e.stopPropagation();
+                            setMaterialToDelete(mat);
+                          }}
+                          className="w-8 h-8 rounded-[8px] bg-white dark:bg-[#0B1220] border border-slate-200 dark:border-gray-700 hover:border-rose-300 hover:text-rose-600 text-[#6B7280] dark:text-gray-400 flex items-center justify-center hover:scale-105 active:scale-95 transition-all duration-150 min-touch cursor-pointer"
+                          title="Delete Material"
+                          aria-label="Delete"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
-                  {/* Toggle Switch */}
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="text-[11px] text-[#6B7280] dark:text-gray-400 font-medium hidden xs:inline">
-                      {mat.in_stock !== false ? 'In Stock' : 'Out'}
-                    </span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={mat.in_stock !== false}
-                      onClick={(e) => handleToggleStock(mat, e)}
-                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#2F6FED]/30 ${
-                        mat.in_stock !== false ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-gray-700'
-                      }`}
-                      title={mat.in_stock !== false ? 'Toggle to mark Out of Stock' : 'Toggle to mark In Stock'}
-                    >
+                  {/* Inventory Status & Toggle Switch Row */}
+                  <div
+                    className="mt-3 pt-2.5 border-t border-slate-200/60 dark:border-gray-800 flex items-center justify-between gap-2"
+                    onClick={(e) => {
+                      if (isSelectMode) {
+                        e.stopPropagation();
+                        toggleSelectMaterial(identifier);
+                      } else {
+                        e.stopPropagation();
+                      }
+                    }}
+                  >
+                    <div className="flex items-center gap-2 flex-wrap min-w-0">
+                      {/* Visual Status Indicator: Green Dot / Red Dot */}
                       <span
-                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                          mat.in_stock !== false ? 'translate-x-4' : 'translate-x-0'
+                        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
+                          mat.in_stock !== false
+                            ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border-emerald-200/60 dark:border-emerald-800/60'
+                            : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400 border-rose-200/60 dark:border-rose-800/60'
                         }`}
-                      />
-                    </button>
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            mat.in_stock !== false ? 'bg-emerald-500' : 'bg-rose-500'
+                          }`}
+                        />
+                        <span>{mat.in_stock !== false ? 'In Stock' : 'Out of Stock'}</span>
+                      </span>
+
+                      {/* Stock Qty (Inline Editable) */}
+                      {editingStockQtyId === (mat.id || mat.localId) ? (
+                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            value={stockQtyInput}
+                            onChange={(e) => setStockQtyInput(e.target.value)}
+                            placeholder="Qty"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveStockQty(mat);
+                              if (e.key === 'Escape') setEditingStockQtyId(null);
+                            }}
+                            className="w-16 px-1.5 py-0.5 bg-white dark:bg-[#0B1220] border border-[#2F6FED] rounded-[6px] text-[11px] font-medium text-[#0B1B3F] dark:text-white focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSaveStockQty(mat)}
+                            className="w-5 h-5 flex items-center justify-center rounded bg-[#2F6FED] text-white hover:bg-blue-600 cursor-pointer"
+                            title="Save quantity"
+                          >
+                            <Check className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingStockQtyId(null)}
+                            className="w-5 h-5 flex items-center justify-center rounded text-[#6B7280] hover:text-[#0B1B3F] dark:hover:text-white cursor-pointer"
+                            title="Cancel"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => handleStartEditStockQty(mat, e)}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-[6px] bg-slate-100 dark:bg-gray-800 text-[#6B7280] dark:text-gray-300 hover:text-[#2F6FED] dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 border border-slate-200/60 dark:border-gray-700/60 transition-colors cursor-pointer"
+                          title="Click to edit stock count"
+                        >
+                          {mat.stock_qty !== undefined && mat.stock_qty !== null && mat.stock_qty !== '' ? (
+                            <span>Qty: <strong className="text-[#0B1B3F] dark:text-white">{mat.stock_qty}</strong></span>
+                          ) : (
+                            <span className="opacity-75">+ Add Qty</span>
+                          )}
+                          <Edit2 className="w-2.5 h-2.5 opacity-60" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Toggle Switch */}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="text-[11px] text-[#6B7280] dark:text-gray-400 font-medium hidden xs:inline">
+                        {mat.in_stock !== false ? 'In Stock' : 'Out'}
+                      </span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={mat.in_stock !== false}
+                        onClick={(e) => handleToggleStock(mat, e)}
+                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#2F6FED]/30 ${
+                          mat.in_stock !== false ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-gray-700'
+                        }`}
+                        title={mat.in_stock !== false ? 'Toggle to mark Out of Stock' : 'Toggle to mark In Stock'}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                            mat.in_stock !== false ? 'translate-x-4' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </motion.div>
-            ))}
+                </motion.div>
+              );
+            })}
 
           </motion.div>
         )}
       </main>
 
-      {/* Floating Action Button for Mobile (+ Add Material) */}
-      <motion.button
-        initial={{ scale: 0.8, opacity: 0 }}
-        animate={{ scale: [0.8, 1.1, 1], opacity: 1 }}
-        transition={{ duration: 0.35, ease: 'easeOut' }}
-        whileTap={{ scale: 0.95 }}
-        onClick={handleOpenAdd}
-        className="sm:hidden lg:hidden fixed bottom-20 right-5 z-40 w-14 h-14 bg-[#2F6FED] hover:bg-blue-600 text-white rounded-full shadow-lg flex items-center justify-center transition-colors duration-150 print:hidden cursor-pointer"
-        aria-label="Add Material"
-        title="Add Material"
-      >
-        <Plus className="w-6 h-6 stroke-[2.5]" />
-      </motion.button>
+      {/* Floating Action Button for Mobile (+ Add Material) - hidden in select mode */}
+      {!isSelectMode && (
+        <motion.button
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: [0.8, 1.1, 1], opacity: 1 }}
+          transition={{ duration: 0.35, ease: 'easeOut' }}
+          whileTap={{ scale: 0.95 }}
+          onClick={handleOpenAdd}
+          className="sm:hidden lg:hidden fixed bottom-20 right-5 z-40 w-14 h-14 bg-[#2F6FED] hover:bg-blue-600 text-white rounded-full shadow-lg flex items-center justify-center transition-colors duration-150 print:hidden cursor-pointer"
+          aria-label="Add Material"
+          title="Add Material"
+        >
+          <Plus className="w-6 h-6 stroke-[2.5]" />
+        </motion.button>
+      )}
+
+      {/* Sticky Multi-Select Bulk Action Bar */}
+      <AnimatePresence>
+        {isSelectMode && (
+          <motion.div
+            initial={{ opacity: 0, y: 20, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.96 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-40 w-[94%] max-w-xl bg-white/95 dark:bg-[#1A2332]/95 backdrop-blur-md border border-slate-200/90 dark:border-gray-700/80 rounded-[16px] shadow-2xl p-2.5 sm:p-3 flex items-center justify-between gap-2"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] sm:text-[14px] font-bold text-[#0B1B3F] dark:text-white px-2.5 py-1 bg-slate-100 dark:bg-gray-800 rounded-[8px]">
+                {selectedMaterialIds.size} selected
+              </span>
+              <button
+                type="button"
+                onClick={handleSelectAllVisible}
+                className="text-[12px] sm:text-[13px] font-semibold text-[#2F6FED] dark:text-blue-400 hover:underline px-2 py-1 cursor-pointer"
+              >
+                {isAllVisibleSelected ? 'Deselect All' : `Select All (${materials.length})`}
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <button
+                type="button"
+                disabled={selectedMaterialIds.size === 0}
+                onClick={() => setIsBulkDeleteModalOpen(true)}
+                className="px-3.5 py-2 text-[12px] sm:text-[13px] font-semibold bg-rose-600 hover:bg-rose-700 disabled:opacity-40 disabled:cursor-not-allowed hover:scale-[1.02] active:scale-95 text-white rounded-[10px] shadow-xs flex items-center gap-1.5 transition-all duration-150 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Selected</span>
+              </button>
+              <button
+                type="button"
+                onClick={toggleSelectMode}
+                className="px-3 py-2 text-[12px] sm:text-[13px] font-medium text-[#6B7280] dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 rounded-[10px] transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Bulk Delete Confirmation Modal */}
+      <AnimatePresence>
+        {isBulkDeleteModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 dark:bg-black/75 backdrop-blur-xs"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className="bg-white dark:bg-[#1A2332] border border-transparent dark:border-gray-700 rounded-[14px] p-5 max-w-sm w-full shadow-2xl"
+            >
+              <h3 className="text-[17px] font-bold text-[#0B1B3F] dark:text-white">
+                Delete {selectedMaterialIds.size} {selectedMaterialIds.size === 1 ? 'Material' : 'Materials'}?
+              </h3>
+              <p className="text-[13px] text-[#6B7280] dark:text-gray-400 mt-2 leading-relaxed">
+                Delete <span className="font-bold text-[#0B1B3F] dark:text-white">{selectedMaterialIds.size}</span> {selectedMaterialIds.size === 1 ? 'material' : 'materials'}? This cannot be undone. Past quotation items will remain unaffected.
+              </p>
+              <div className="mt-5 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkDeleteModalOpen(false)}
+                  className="px-4 py-2 text-[13px] font-medium text-[#6B7280] dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800 rounded-[10px] active:scale-95 transition-all min-touch cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmBulkDelete}
+                  disabled={isBulkDeleting}
+                  className="px-4 py-2 text-[13px] font-semibold bg-rose-600 hover:bg-rose-700 hover:scale-[1.02] active:scale-95 text-white rounded-[10px] min-touch flex items-center gap-1 transition-all duration-150 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isBulkDeleting ? 'Deleting...' : `Delete ${selectedMaterialIds.size}`}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Add / Edit Material Modal */}
       <AnimatePresence>

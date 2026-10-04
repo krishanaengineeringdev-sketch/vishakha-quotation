@@ -492,7 +492,7 @@ export async function getQuotations(searchQuery = '') {
 export async function getQuotationsLocal(searchQuery = '') {
   try {
     const [allQuotes, allCustomers] = await Promise.all([
-      db.quotations.toArray(),
+      db.quotations.filter((q) => !q.is_deleted).toArray(),
       db.customers.toArray()
     ]);
 
@@ -910,6 +910,29 @@ export async function deleteQuotation(id) {
     }
   }
 
+  // If offline and quotation had a cloud UUID, queue deletion in Dexie with pending-delete flag
+  if (cloudId && (!navigator.onLine || !isSupabaseConfigured || !supabase)) {
+    try {
+      if (target?.localId) {
+        await db.quotations.update(target.localId, { is_deleted: true, synced: false });
+        await db.quotation_items
+          .filter(
+            (it) =>
+              it.quotation_id === target.id ||
+              it.quotation_id === String(target.localId) ||
+              it.quotation_local_id === target.localId
+          )
+          .delete();
+      } else if (isUuid(id)) {
+        await db.quotations.where('id').equals(id).modify({ is_deleted: true, synced: false });
+        await db.quotation_items.where('quotation_id').equals(id).delete();
+      }
+      return { success: true };
+    } catch (dexieErr) {
+      console.warn('[Dexie] Offline quotation delete queue error:', dexieErr);
+    }
+  }
+
   // Supabase delete succeeded (or offline purely local quote) -> Drop from Dexie cache
   try {
     if (target?.localId) {
@@ -931,6 +954,28 @@ export async function deleteQuotation(id) {
   }
 
   return { success: true };
+}
+
+export async function deleteQuotationsBulk(identifiers) {
+  if (!Array.isArray(identifiers) || identifiers.length === 0) {
+    return { success: true, count: 0 };
+  }
+
+  let successCount = 0;
+  for (const id of identifiers) {
+    try {
+      const res = await deleteQuotation(id);
+      if (res?.success) successCount++;
+    } catch (e) {
+      console.warn('[deleteQuotationsBulk] Error deleting quote:', id, e);
+    }
+  }
+
+  return {
+    success: successCount > 0 || identifiers.length === 0,
+    count: successCount,
+    total: identifiers.length
+  };
 }
 
 export async function getNextQuoteNo() {
@@ -1128,7 +1173,7 @@ export async function getMaterials(searchQuery = '', categoryFilter = 'All', sto
 export async function getMaterialsLocal(searchQuery = '', categoryFilter = 'All', stockFilter = 'All') {
   try {
     const [all, categories] = await Promise.all([
-      db.materials.filter((m) => m.is_active !== false).toArray(),
+      db.materials.filter((m) => m.is_active !== false && !m.is_deleted).toArray(),
       db.material_categories.filter((c) => !c.is_deleted).toArray()
     ]);
 
@@ -1708,6 +1753,24 @@ export async function deleteMaterial(identifier) {
     }
   }
 
+  // If offline and material had a cloud UUID, queue soft deletion in Dexie with pending-delete flag
+  if (cloudId && (!navigator.onLine || !isSupabaseConfigured || !supabase)) {
+    try {
+      if (target?.localId) {
+        await db.materials.update(target.localId, { is_deleted: true, is_active: false, synced: false });
+      } else if (isUuid(targetId)) {
+        await db.materials.where('id').equals(targetId).modify({ is_deleted: true, is_active: false, synced: false });
+      }
+      // Unlink any local Dexie quotation items referencing this material
+      await db.quotation_items
+        .filter((it) => it.material_id === cloudId || String(it.material_id) === String(targetId))
+        .modify({ material_id: null });
+      return { success: true };
+    } catch (e) {
+      console.warn('[Dexie] Offline material delete queue error:', e);
+    }
+  }
+
   // Drop from local Dexie cache (Requirement 4: local cache also drops the item)
   try {
     if (target?.localId) {
@@ -1725,6 +1788,28 @@ export async function deleteMaterial(identifier) {
   }
 
   return { success: true };
+}
+
+export async function deleteMaterialsBulk(identifiers) {
+  if (!Array.isArray(identifiers) || identifiers.length === 0) {
+    return { success: true, count: 0 };
+  }
+
+  let successCount = 0;
+  for (const id of identifiers) {
+    try {
+      const res = await deleteMaterial(id);
+      if (res?.success) successCount++;
+    } catch (e) {
+      console.warn('[deleteMaterialsBulk] Error deleting material:', id, e);
+    }
+  }
+
+  return {
+    success: successCount > 0 || identifiers.length === 0,
+    count: successCount,
+    total: identifiers.length
+  };
 }
 
 // ----------------- DASHBOARD ANALYTICS (OFFLINE-FIRST VIA DEXIE) -----------------

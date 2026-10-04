@@ -826,6 +826,18 @@ export async function syncPendingChanges() {
 
       for (const mat of unsyncedMaterials) {
         try {
+          if (mat.is_deleted) {
+            if (mat.id && uuidRegex.test(String(mat.id).trim())) {
+              try {
+                await supabase.from('materials').update({ is_active: false }).eq('id', mat.id);
+              } catch (e) {
+                console.warn('[Sync] Failed soft-deleting material in cloud:', e);
+              }
+            }
+            await db.materials.delete(mat.localId);
+            continue;
+          }
+
           const rawCatId = mat.category_id ? String(mat.category_id).trim() : null;
           const cleanCatId = rawCatId && uuidRegex.test(rawCatId) && validRemoteCategoryIds.has(rawCatId.toLowerCase())
             ? rawCatId
@@ -884,6 +896,22 @@ export async function syncPendingChanges() {
     const unsyncedQuotes = await db.quotations.filter((q) => !q.synced).toArray();
     for (const quote of unsyncedQuotes) {
       try {
+        if (quote.is_deleted) {
+          if (quote.id) {
+            try {
+              await supabase.from('quotation_items').delete().eq('quotation_id', quote.id);
+              await supabase.from('quotations').delete().eq('id', quote.id);
+            } catch (e) {
+              console.warn('[Sync] Failed deleting quotation in cloud:', e);
+            }
+          }
+          await db.quotations.delete(quote.localId);
+          await db.quotation_items
+            .filter((it) => it.quotation_id === quote.id || it.quotation_local_id === quote.localId)
+            .delete();
+          continue;
+        }
+
         // Resolve customer id if pending
         let custId = quote.customer_id;
         if (!custId) {
