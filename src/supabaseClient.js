@@ -47,21 +47,32 @@ export const initLocalStorageDefaults = () => {
 };
 
 // Storage helper for uploading images (Logo & Signature)
-export async function uploadAsset(file, path) {
+export async function uploadAsset(file, path = 'asset') {
   if (!file) return null;
+
+  // Compress image if possible
+  let fileToUpload = file;
+  try {
+    fileToUpload = await compressImage(file, 800, 0.85);
+  } catch (compErr) {
+    // Ignore compression failure and use raw file
+  }
 
   // Try Supabase Storage if configured
   if (isSupabaseConfigured && supabase) {
     try {
-      const fileExt = file.name ? file.name.split('.').pop() : 'png';
+      const fileExt = fileToUpload.name ? fileToUpload.name.split('.').pop() : 'png';
       const fileName = `${path}-${Date.now()}.${fileExt}`;
       const filePath = `assets/${fileName}`;
 
-      const { error: uploadError } = await supabase.storage
+      const { data: uploadData, error: uploadError } = await supabase.storage
         .from('company-assets')
-        .upload(filePath, file, { upsert: true });
+        .upload(filePath, fileToUpload, { 
+          upsert: true,
+          contentType: fileToUpload.type || (fileExt === 'png' ? 'image/png' : 'image/jpeg')
+        });
 
-      if (!uploadError) {
+      if (!uploadError && uploadData) {
         const { data: publicUrlData } = supabase.storage
           .from('company-assets')
           .getPublicUrl(filePath);
@@ -69,11 +80,11 @@ export async function uploadAsset(file, path) {
         if (publicUrlData?.publicUrl) {
           return publicUrlData.publicUrl;
         }
-      } else {
-        console.warn('Supabase storage upload failed or bucket does not exist. Falling back to local Base64 URL:', uploadError.message);
+      } else if (uploadError) {
+        console.error(`[uploadAsset] Supabase storage upload error for ${filePath}:`, uploadError);
       }
     } catch (err) {
-      console.warn('Storage upload error, using Data URL fallback:', err);
+      console.error('[uploadAsset] Storage upload exception, using Data URL fallback:', err);
     }
   }
 
@@ -81,8 +92,65 @@ export async function uploadAsset(file, path) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
-    reader.onerror = (error) => reject(error);
-    reader.readAsDataURL(file);
+    reader.onerror = (error) => {
+      console.error('[uploadAsset] FileReader error:', error);
+      reject(error);
+    };
+    reader.readAsDataURL(fileToUpload);
+  });
+}
+
+// Storage helper for uploading Signature image to 'company-assets' bucket
+export async function uploadSignatureImage(file) {
+  if (!file) return null;
+
+  // Compress to max 800px width/height and 85% quality
+  let fileToUpload = file;
+  try {
+    fileToUpload = await compressImage(file, 800, 0.85);
+  } catch (compErr) {
+    console.warn('[uploadSignatureImage] Compression note:', compErr);
+  }
+
+  const fileExt = fileToUpload.name ? fileToUpload.name.split('.').pop() : 'png';
+  const fileName = `signature-${Date.now()}.${fileExt || 'png'}`;
+
+  // 1. Try 'company-assets' public storage bucket
+  if (isSupabaseConfigured && supabase) {
+    try {
+      const { data, error } = await supabase.storage
+        .from('company-assets')
+        .upload(fileName, fileToUpload, {
+          upsert: true,
+          contentType: fileToUpload.type || 'image/png'
+        });
+
+      if (error) {
+        console.error('[uploadSignatureImage] Supabase Storage upload error:', error);
+      } else if (data?.path) {
+        const { data: urlData } = supabase.storage
+          .from('company-assets')
+          .getPublicUrl(data.path);
+
+        if (urlData?.publicUrl) {
+          console.info('[uploadSignatureImage] Uploaded signature successfully to company-assets bucket:', urlData.publicUrl);
+          return urlData.publicUrl;
+        }
+      }
+    } catch (err) {
+      console.error('[uploadSignatureImage] Unexpected storage exception:', err);
+    }
+  }
+
+  // 2. Fallback to Data URL for instant preview, offline durability, and Dexie storage
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = (error) => {
+      console.error('[uploadSignatureImage] FileReader error:', error);
+      reject(error);
+    };
+    reader.readAsDataURL(fileToUpload);
   });
 }
 

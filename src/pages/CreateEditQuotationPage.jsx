@@ -998,7 +998,7 @@ export default function CreateEditQuotationPage() {
               className="h-10 w-full bg-white dark:bg-[#1A2332] hover:bg-blue-50/60 dark:hover:bg-blue-950/40 border border-[#2F6FED]/50 hover:border-[#2F6FED] text-[#2F6FED] font-semibold rounded-[10px] flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-95 hover:shadow-md transition-all duration-150 min-touch text-[13px] shadow-xs cursor-pointer"
             >
               <Package className="w-4 h-4" />
-              <span>Select Material</span>
+              <span>Select from Inventory</span>
             </button>
             <button
               type="button"
@@ -1222,7 +1222,7 @@ export default function CreateEditQuotationPage() {
                   </div>
                   <div>
                     <h3 className="text-[16px] font-bold text-[#0B1B3F] dark:text-white">
-                      Select Material
+                      Select from Inventory
                     </h3>
                     <p className="text-[11px] text-[#6B7280] dark:text-gray-400">
                       Tap to add as snapshot line item
@@ -1249,7 +1249,7 @@ export default function CreateEditQuotationPage() {
                     type="text"
                     value={materialPickerSearch}
                     onChange={(e) => setMaterialPickerSearch(e.target.value)}
-                    placeholder="Search materials by name or code..."
+                    placeholder="Search inventory by name or code..."
                     autoFocus
                     className="w-full pl-9 pr-8 py-2 bg-white dark:bg-[#1A2332] border border-slate-200 dark:border-gray-700 rounded-[10px] text-[14px] text-[#0B1B3F] dark:text-white placeholder-[#6B7280] dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#2F6FED] min-touch"
                   />
@@ -1313,12 +1313,12 @@ export default function CreateEditQuotationPage() {
                     </div>
                     <div>
                       <p className="text-[14px] font-bold text-[#0B1B3F] dark:text-white">
-                        No materials found
+                        No inventory items found
                       </p>
                       <p className="text-[12px] text-[#6B7280] dark:text-gray-400 mt-0.5">
                         {materialPickerSearch || pickerCategory !== 'All'
                           ? `No match found in catalog`
-                          : 'No saved materials in catalog'}
+                          : 'No saved items in inventory catalog'}
                       </p>
                     </div>
                     <button
@@ -1413,7 +1413,7 @@ export default function CreateEditQuotationPage() {
                   }}
                   className="text-[12px] font-semibold text-[#2F6FED] hover:underline"
                 >
-                  Manage Catalog →
+                  Manage Inventory →
                 </button>
 
                 <button

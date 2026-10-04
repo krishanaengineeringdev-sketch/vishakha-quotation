@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { getCompanyProfile, saveCompanyProfile } from '../services/dataService';
-import { uploadAsset, isSupabaseConfigured } from '../supabaseClient';
+import {
+  getCompanyProfile,
+  saveCompanyProfile,
+  saveCompanyProfileSignature,
+  saveCompanyProfileLogo
+} from '../services/dataService';
+import { uploadAsset, uploadSignatureImage, isSupabaseConfigured } from '../supabaseClient';
 import Header from '../components/Header';
 import Sidebar from '../components/Sidebar';
 import BottomNav from '../components/BottomNav';
@@ -15,7 +20,8 @@ import {
   Mail,
   FileSignature,
   Check,
-  AlertCircle
+  AlertCircle,
+  Trash2
 } from 'lucide-react';
 
 export default function SettingsPage() {
@@ -23,6 +29,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [profileId, setProfileId] = useState(null);
 
   // Form Fields
   const [name, setName] = useState(COMPANY_CONFIG.name);
@@ -43,6 +50,7 @@ export default function SettingsPage() {
       try {
         const p = await getCompanyProfile();
         if (p) {
+          if (p.id) setProfileId(p.id);
           if (p.name) setName(p.name);
           if (p.owner_name) setOwnerName(p.owner_name);
           if (p.address) setAddress(p.address);
@@ -65,16 +73,25 @@ export default function SettingsPage() {
   const handleLogoUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = '';
 
     setUploadingLogo(true);
     setErrorMsg('');
+    setSuccessMsg('');
+
     try {
       const url = await uploadAsset(file, 'logo');
       if (url) {
         setLogoUrl(url);
+        const updatedProfile = await saveCompanyProfileLogo(url, profileId);
+        if (updatedProfile?.id) {
+          setProfileId(updatedProfile.id);
+        }
+        setSuccessMsg('Logo uploaded and saved successfully!');
+        setTimeout(() => setSuccessMsg(''), 3500);
       }
     } catch (err) {
-      console.error('Logo upload error:', err);
+      console.error('[handleLogoUpload] Logo upload error:', err);
       setErrorMsg('Failed to process logo image.');
     } finally {
       setUploadingLogo(false);
@@ -84,17 +101,53 @@ export default function SettingsPage() {
   const handleSignatureUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = '';
 
     setUploadingSignature(true);
     setErrorMsg('');
+    setSuccessMsg('');
+
     try {
-      const url = await uploadAsset(file, 'signature');
-      if (url) {
-        setSignatureUrl(url);
+      console.log('[handleSignatureUpload] Starting signature image upload:', file.name, file.size);
+
+      // 1. Upload signature image to Supabase Storage ('company-assets' bucket)
+      const publicUrl = await uploadSignatureImage(file);
+      if (!publicUrl) {
+        throw new Error('Failed to upload signature image to storage.');
       }
+      console.log('[handleSignatureUpload] Uploaded signature public URL:', publicUrl);
+
+      // 2. Set local state immediately for instant feedback
+      setSignatureUrl(publicUrl);
+
+      // 3. Persist immediately into company_profile (Supabase & local Dexie cache)
+      const updatedProfile = await saveCompanyProfileSignature(publicUrl, profileId);
+      if (updatedProfile?.id) {
+        setProfileId(updatedProfile.id);
+      }
+
+      setSuccessMsg('Signature uploaded and saved successfully! Quotation Preview is now updated.');
+      setTimeout(() => setSuccessMsg(''), 4000);
     } catch (err) {
-      console.error('Signature upload error:', err);
-      setErrorMsg('Failed to process signature image.');
+      console.error('[handleSignatureUpload] Signature upload/save error:', err);
+      setErrorMsg(err.message || 'Failed to upload and save signature.');
+    } finally {
+      setUploadingSignature(false);
+    }
+  };
+
+  const handleRemoveSignature = async () => {
+    setUploadingSignature(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+    try {
+      setSignatureUrl('');
+      await saveCompanyProfileSignature('', profileId);
+      setSuccessMsg('Signature removed successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+    } catch (err) {
+      console.error('[handleRemoveSignature] Error removing signature:', err);
+      setErrorMsg('Failed to remove signature.');
     } finally {
       setUploadingSignature(false);
     }
@@ -107,7 +160,7 @@ export default function SettingsPage() {
     setSuccessMsg('');
 
     try {
-      await saveCompanyProfile({
+      const saved = await saveCompanyProfile({
         name: name.trim() || 'Vishakha Industries',
         owner_name: ownerName.trim(),
         address: address.trim(),
@@ -118,6 +171,10 @@ export default function SettingsPage() {
         default_greeting: defaultGreeting.trim(),
         default_closing: defaultClosing.trim()
       });
+
+      if (saved?.id) {
+        setProfileId(saved.id);
+      }
 
       setSuccessMsg('Company profile saved successfully!');
       setTimeout(() => setSuccessMsg(''), 3500);
@@ -264,16 +321,30 @@ export default function SettingsPage() {
                     )}
                   </div>
 
-                  <label className="cursor-pointer inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#2F6FED] hover:text-white bg-white dark:bg-[#0B1220] hover:bg-[#2F6FED] dark:hover:bg-[#2F6FED] border border-blue-200 dark:border-blue-900/60 px-3.5 py-1.5 rounded-[8px] transition-all min-touch shadow-xs mt-2">
-                    <FileSignature className="w-3.5 h-3.5" />
-                    <span>{uploadingSignature ? 'Processing...' : 'Upload Signature'}</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleSignatureUpload}
-                      className="hidden"
-                    />
-                  </label>
+                  <div className="flex items-center gap-2 mt-2">
+                    <label className="cursor-pointer inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#2F6FED] hover:text-white bg-white dark:bg-[#0B1220] hover:bg-[#2F6FED] dark:hover:bg-[#2F6FED] border border-blue-200 dark:border-blue-900/60 px-3 py-1.5 rounded-[8px] transition-all min-touch shadow-xs">
+                      <FileSignature className="w-3.5 h-3.5" />
+                      <span>{uploadingSignature ? 'Saving...' : signatureUrl ? 'Change' : 'Upload'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleSignatureUpload}
+                        className="hidden"
+                      />
+                    </label>
+                    {signatureUrl && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveSignature}
+                        disabled={uploadingSignature}
+                        className="inline-flex items-center gap-1 text-[12px] font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 px-2.5 py-1.5 rounded-[8px] transition-all min-touch shadow-xs"
+                        title="Remove signature"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Remove</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 

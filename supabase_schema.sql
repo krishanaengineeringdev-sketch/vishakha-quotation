@@ -133,6 +133,20 @@ set category_id = c.id
 from material_categories c
 where trim(m.category) = c.name and m.category_id is null;
 
+-- 13. Company Profile Public/Anon Access (Optional if using app in demo or unauthenticated mode)
+-- If your application allows updating company settings without requiring email login,
+-- run the following policies to permit reading and updating company_profile:
+-- drop policy if exists "anon_company_profile_read" on company_profile;
+-- create policy "anon_company_profile_read" on company_profile for select using (true);
+-- drop policy if exists "anon_company_profile_all" on company_profile;
+-- create policy "anon_company_profile_all" on company_profile for all using (true) with check (true);
 
+-- 14. Delete demo/placeholder categories and ensure unlinked materials are clean:
+delete from material_categories 
+where name in ('Electrical', 'Fabrication', 'Hardware', 'Raw Material', 'Services');
 
+-- Unlink any materials referencing deleted categories so they become Uncategorized
+update materials
+set category_id = null
+where category_id is not null and category_id not in (select id from material_categories);
 

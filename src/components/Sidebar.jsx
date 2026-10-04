@@ -44,7 +44,7 @@ export default function Sidebar() {
     },
     {
       to: '/materials',
-      label: 'Materials Catalog',
+      label: 'Inventory Catalog',
       icon: Package
     },
     {

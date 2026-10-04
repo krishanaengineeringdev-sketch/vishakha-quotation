@@ -9,8 +9,7 @@ import {
   getMaterialCategories,
   getMaterialCategoriesLocal,
   saveMaterialCategory,
-  deleteMaterialCategory,
-  DEFAULT_MATERIAL_CATEGORIES
+  deleteMaterialCategory
 } from '../services/dataService';
 import { uploadMaterialImage } from '../supabaseClient';
 import Header from '../components/Header';
@@ -213,29 +212,42 @@ export default function MaterialsPage() {
   }, [fetchMaterials, fetchCategories]);
 
   // Compute item counts per category (and uncategorized) across all materials
+  // Selected category object (when filtered by a specific category)
+  const selectedCategoryObj = useMemo(() => {
+    if (!selectedCategory || selectedCategory === 'All' || selectedCategory === 'Uncategorized') {
+      return null;
+    }
+    return categories.find((c) => c.id === selectedCategory || c.name === selectedCategory) || null;
+  }, [selectedCategory, categories]);
+
+  // Selected category display label for headings and empty states
+  const selectedCategoryDisplayName = useMemo(() => {
+    if (selectedCategory === 'All') return 'All Categories';
+    if (selectedCategory === 'Uncategorized') return 'Uncategorized';
+    return selectedCategoryObj ? selectedCategoryObj.name : selectedCategory;
+  }, [selectedCategory, selectedCategoryObj]);
+
+  // Compute item counts per category (and uncategorized) across all materials
   const categoryMaterialCounts = useMemo(() => {
     const counts = {};
     let uncategorized = 0;
 
+    categories.forEach((cat) => {
+      counts[cat.id] = 0;
+    });
+
     allMaterials.forEach((m) => {
-      if (
-        !m.category_id &&
-        (!m.category || m.category.trim() === '' || m.category.trim().toLowerCase() === 'uncategorized')
-      ) {
-        uncategorized++;
+      // Match by UUID or category name
+      const matchedCat = categories.find(
+        (c) =>
+          (m.category_id && c.id && String(c.id).toLowerCase() === String(m.category_id).toLowerCase()) ||
+          (m.category && c.name && c.name.toLowerCase().trim() === m.category.toLowerCase().trim())
+      );
+
+      if (matchedCat) {
+        counts[matchedCat.id] = (counts[matchedCat.id] || 0) + 1;
       } else {
-        const cat = categories.find(
-          (c) =>
-            c.id === m.category_id ||
-            (m.category && c.name.toLowerCase().trim() === m.category.toLowerCase().trim())
-        );
-        if (cat) {
-          counts[cat.id] = (counts[cat.id] || 0) + 1;
-        } else if (m.category_id) {
-          counts[m.category_id] = (counts[m.category_id] || 0) + 1;
-        } else {
-          uncategorized++;
-        }
+        uncategorized++;
       }
     });
 
@@ -246,12 +258,30 @@ export default function MaterialsPage() {
   const materials = useMemo(() => {
     let result = [...allMaterials];
 
+    // Filter by Category
     if (selectedCategory && selectedCategory !== 'All') {
-      result = result.filter(
-        (m) =>
-          m.category_id === selectedCategory ||
-          (m.category && m.category.toLowerCase().trim() === selectedCategory.toLowerCase().trim())
-      );
+      if (selectedCategory === 'Uncategorized') {
+        result = result.filter(
+          (m) =>
+            !m.category_id &&
+            (!m.category || m.category.trim() === '' || m.category.trim().toLowerCase() === 'uncategorized')
+        );
+      } else {
+        const targetId = selectedCategoryObj ? selectedCategoryObj.id : selectedCategory;
+        const targetName = (selectedCategoryObj?.name || selectedCategory).toLowerCase().trim();
+
+        result = result.filter((m) => {
+          // Compare UUID vs UUID (m.category_id === targetId)
+          if (m.category_id && targetId && String(m.category_id).toLowerCase() === String(targetId).toLowerCase()) {
+            return true;
+          }
+          // Fallback: compare category name (m.category === targetName)
+          if (m.category && m.category.toLowerCase().trim() === targetName) {
+            return true;
+          }
+          return false;
+        });
+      }
     }
 
     if (stockFilter === 'In Stock') {
@@ -272,7 +302,7 @@ export default function MaterialsPage() {
     }
 
     return result;
-  }, [allMaterials, selectedCategory, stockFilter, searchQuery]);
+  }, [allMaterials, selectedCategory, selectedCategoryObj, stockFilter, searchQuery]);
 
   const showNotification = (message, type = 'success') => {
     setToast({ message, type });
@@ -700,10 +730,10 @@ export default function MaterialsPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
           <div>
             <h2 className="text-[20px] sm:text-[24px] font-bold text-[#0B1B3F] dark:text-white tracking-tight">
-              Materials Catalog
+              Inventory Catalog
             </h2>
             <p className="text-[12px] sm:text-[13px] text-[#6B7280] dark:text-gray-400">
-              {materials.length} {materials.length === 1 ? 'item' : 'items'} saved for quick quotation
+              {materials.length} {materials.length === 1 ? 'item' : 'items'} saved in inventory for quick quotation
             </p>
           </div>
 
@@ -931,13 +961,13 @@ export default function MaterialsPage() {
             </div>
             <h3 className="text-[16px] font-bold text-[#0B1B3F] dark:text-white">
               {searchQuery || selectedCategory !== 'All' || stockFilter !== 'All'
-                ? 'No Matching Materials'
-                : 'No Materials Yet'}
+                ? 'No Matching Items'
+                : 'No Inventory Items Yet'}
             </h3>
             <p className="text-[13px] text-[#6B7280] dark:text-gray-400 max-w-xs mt-1">
               {searchQuery || selectedCategory !== 'All' || stockFilter !== 'All'
-                ? `No materials found matching ${stockFilter !== 'All' ? `"${stockFilter}"` : ''} ${selectedCategory !== 'All' ? `category "${selectedCategory}"` : ''} ${searchQuery ? `query "${searchQuery}"` : ''}. Try another filter or add a new material.`
-                : 'Add your product catalog items with rates and photos to quickly select them when creating quotations.'}
+                ? `No items found matching ${stockFilter !== 'All' ? `"${stockFilter}"` : ''} ${selectedCategory !== 'All' ? `category "${selectedCategoryDisplayName}"` : ''} ${searchQuery ? `query "${searchQuery}"` : ''}. Try another filter or add a new item.`
+                : 'Add your inventory items with rates and photos to quickly select them when creating quotations.'}
             </p>
             <button
               type="button"
@@ -1251,7 +1281,7 @@ export default function MaterialsPage() {
                         type="text"
                         value={newCategoryInput}
                         onChange={(e) => setNewCategoryInput(e.target.value)}
-                        placeholder="e.g. Fabrication, Furniture, Hardware"
+                        placeholder="e.g. Office Furniture, Components, Finished Goods"
                         autoFocus
                         className="flex-1 px-3 py-2 bg-[#F3F5F9] dark:bg-[#0B1220] border border-slate-200/80 dark:border-gray-700 focus:border-[#2F6FED] rounded-[10px] text-[13px] text-[#0B1B3F] dark:text-white placeholder-[#6B7280] dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[#2F6FED]/20"
                       />

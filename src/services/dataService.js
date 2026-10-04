@@ -5,7 +5,9 @@ import {
   syncPendingChanges,
   syncFromSupabase,
   refreshFromSupabase,
+  purgeDemoCategories,
   seedAndMigrateMaterialCategories,
+  DEMO_CATEGORIES_TO_PURGE,
   isCloudImageUrlSupported,
   decodeMaterialDescription,
   encodeMaterialDescription,
@@ -72,29 +74,283 @@ export async function saveCompanyProfile(profileData) {
     synced: false
   };
 
-  if (existing?.localId) {
-    await db.company_profile.update(existing.localId, updatedData);
+  let localId = existing?.localId;
+  if (localId) {
+    await db.company_profile.update(localId, updatedData);
   } else {
-    const localId = await db.company_profile.add({ ...updatedData, id: generateUuid() });
+    localId = await db.company_profile.add({ ...updatedData, id: generateUuid() });
     updatedData.localId = localId;
   }
 
-  // Trigger background sync if online
+  // Trigger sync if online
   if (navigator.onLine && isSupabaseConfigured && supabase) {
-    supabase
-      .from('company_profile')
-      .upsert({ ...profileData, id: updatedData.id || undefined })
-      .select()
-      .single()
-      .then(({ data, error }) => {
-        if (!error && data) {
-          db.company_profile.update(updatedData.localId, { ...data, synced: true });
+    try {
+      let targetId = existing?.id;
+      const { data: remoteRows, error: fetchErr } = await supabase
+        .from('company_profile')
+        .select('id')
+        .limit(1);
+
+      if (!fetchErr && remoteRows && remoteRows.length > 0) {
+        targetId = remoteRows[0].id;
+      }
+
+      if (targetId) {
+        console.info(`[saveCompanyProfile] Updating company_profile: supabase.from('company_profile').update(...).eq('id', '${targetId}')`);
+        const { data, error } = await supabase
+          .from('company_profile')
+          .update(profileData)
+          .eq('id', targetId)
+          .select()
+          .single();
+
+        if (error) {
+          console.error('[saveCompanyProfile] Supabase update error:', error);
+          logSupabaseError('update company_profile', error);
+          throw error;
+        } else if (data) {
+          console.info('[saveCompanyProfile] Supabase profile updated:', data);
+          await db.company_profile.update(localId, { ...data, synced: true });
         }
-      })
-      .catch((e) => console.warn('[Sync] Background profile sync failed:', e));
+      } else {
+        console.info('[saveCompanyProfile] Inserting company_profile in Supabase...');
+        const { data, error } = await supabase
+          .from('company_profile')
+          .insert({
+            name: COMPANY_CONFIG.name,
+            owner_name: COMPANY_CONFIG.ownerName,
+            address: COMPANY_CONFIG.address,
+            phone: COMPANY_CONFIG.phone,
+            email: COMPANY_CONFIG.email,
+            logo_url: COMPANY_CONFIG.logoUrl,
+            default_greeting: COMPANY_CONFIG.defaultGreeting,
+            default_closing: COMPANY_CONFIG.defaultClosing,
+            ...profileData
+          })
+          .select()
+          .single();
+
+        if (error) {
+          console.error('[saveCompanyProfile] Supabase insert error:', error);
+          logSupabaseError('insert company_profile', error);
+          throw error;
+        } else if (data) {
+          console.info('[saveCompanyProfile] Supabase profile created:', data);
+          await db.company_profile.update(localId, { ...data, synced: true });
+        }
+      }
+    } catch (e) {
+      console.warn('[saveCompanyProfile] Profile sync note:', e);
+    }
   }
 
   return updatedData;
+}
+
+/**
+ * Update and persist company signature URL immediately in local Dexie cache and Supabase.
+ * Updates local Dexie cache first so Preview reflects the change immediately.
+ * Then calls supabase.from('company_profile').update({ signature_url: newUrl }).eq('id', profileId)
+ * with robust error handling and console logging so failure isn't silent.
+ */
+export async function saveCompanyProfileSignature(newUrl, preferredProfileId = null) {
+  // 1. Immediately update Dexie cache so Preview updates without full app refresh
+  const existing = await db.company_profile.toCollection().first();
+  let localId = existing?.localId;
+  let profileId = preferredProfileId || existing?.id;
+
+  if (localId) {
+    await db.company_profile.update(localId, {
+      signature_url: newUrl,
+      synced: false
+    });
+  } else {
+    localId = await db.company_profile.add({
+      name: COMPANY_CONFIG.name,
+      owner_name: COMPANY_CONFIG.ownerName,
+      address: COMPANY_CONFIG.address,
+      phone: COMPANY_CONFIG.phone,
+      email: COMPANY_CONFIG.email,
+      logo_url: COMPANY_CONFIG.logoUrl,
+      signature_url: newUrl,
+      default_greeting: COMPANY_CONFIG.defaultGreeting,
+      default_closing: COMPANY_CONFIG.defaultClosing,
+      id: profileId || generateUuid(),
+      synced: false
+    });
+  }
+
+  let updatedLocal = await db.company_profile.get(localId);
+
+  // 2. Persist to Supabase company_profile table if online
+  if (navigator.onLine && isSupabaseConfigured && supabase) {
+    try {
+      // Find remote profile ID if not already known
+      let targetId = profileId;
+      try {
+        const { data: remoteProfiles, error: fetchErr } = await supabase
+          .from('company_profile')
+          .select('id')
+          .limit(1);
+
+        if (fetchErr) {
+          console.warn('[saveCompanyProfileSignature] Check remote profile warning:', fetchErr);
+        } else if (remoteProfiles && remoteProfiles.length > 0) {
+          targetId = remoteProfiles[0].id;
+        }
+      } catch (fErr) {
+        console.warn('[saveCompanyProfileSignature] Error querying remote profile:', fErr);
+      }
+
+      if (targetId) {
+        console.info(`[saveCompanyProfileSignature] Running: supabase.from('company_profile').update({ signature_url: '${newUrl}' }).eq('id', '${targetId}')`);
+        const { data: updateData, error: updateError } = await supabase
+          .from('company_profile')
+          .update({ signature_url: newUrl })
+          .eq('id', targetId)
+          .select();
+
+        if (updateError) {
+          console.error('[saveCompanyProfileSignature] Supabase update error:', updateError);
+          logSupabaseError('update company_profile.signature_url', updateError);
+          throw updateError;
+        }
+
+        console.info('[saveCompanyProfileSignature] Supabase company_profile updated successfully:', updateData);
+        await db.company_profile.update(localId, { id: targetId, signature_url: newUrl, synced: true });
+        updatedLocal = await db.company_profile.get(localId);
+      } else {
+        // No row in remote table yet - insert the initial company_profile row
+        console.info('[saveCompanyProfileSignature] Inserting initial company_profile in Supabase...');
+        const payload = {
+          name: updatedLocal.name || COMPANY_CONFIG.name,
+          owner_name: updatedLocal.owner_name || COMPANY_CONFIG.ownerName,
+          address: updatedLocal.address || COMPANY_CONFIG.address,
+          phone: updatedLocal.phone || COMPANY_CONFIG.phone,
+          email: updatedLocal.email || COMPANY_CONFIG.email,
+          logo_url: updatedLocal.logo_url || COMPANY_CONFIG.logoUrl,
+          signature_url: newUrl,
+          default_greeting: updatedLocal.default_greeting || COMPANY_CONFIG.defaultGreeting,
+          default_closing: updatedLocal.default_closing || COMPANY_CONFIG.defaultClosing
+        };
+
+        const { data: insertData, error: insertError } = await supabase
+          .from('company_profile')
+          .insert(payload)
+          .select()
+          .single();
+
+        if (insertError) {
+          console.error('[saveCompanyProfileSignature] Supabase insert error:', insertError);
+          logSupabaseError('insert initial company_profile', insertError);
+          throw insertError;
+        }
+
+        console.info('[saveCompanyProfileSignature] Initial company_profile created in Supabase:', insertData);
+        await db.company_profile.update(localId, { id: insertData.id, signature_url: newUrl, synced: true });
+        updatedLocal = await db.company_profile.get(localId);
+      }
+    } catch (err) {
+      console.error('[saveCompanyProfileSignature] Cloud persistence error:', err);
+      // Re-throw so caller can notify user if desired
+      throw err;
+    }
+  }
+
+  return updatedLocal;
+}
+
+/**
+ * Update and persist company logo URL immediately in local Dexie cache and Supabase.
+ */
+export async function saveCompanyProfileLogo(newUrl, preferredProfileId = null) {
+  const existing = await db.company_profile.toCollection().first();
+  let localId = existing?.localId;
+  let profileId = preferredProfileId || existing?.id;
+
+  if (localId) {
+    await db.company_profile.update(localId, {
+      logo_url: newUrl,
+      synced: false
+    });
+  } else {
+    localId = await db.company_profile.add({
+      name: COMPANY_CONFIG.name,
+      owner_name: COMPANY_CONFIG.ownerName,
+      address: COMPANY_CONFIG.address,
+      phone: COMPANY_CONFIG.phone,
+      email: COMPANY_CONFIG.email,
+      logo_url: newUrl,
+      signature_url: '',
+      default_greeting: COMPANY_CONFIG.defaultGreeting,
+      default_closing: COMPANY_CONFIG.defaultClosing,
+      id: profileId || generateUuid(),
+      synced: false
+    });
+  }
+
+  let updatedLocal = await db.company_profile.get(localId);
+
+  if (navigator.onLine && isSupabaseConfigured && supabase) {
+    try {
+      let targetId = profileId;
+      try {
+        const { data: remoteProfiles } = await supabase.from('company_profile').select('id').limit(1);
+        if (remoteProfiles && remoteProfiles.length > 0) {
+          targetId = remoteProfiles[0].id;
+        }
+      } catch (fErr) {}
+
+      if (targetId) {
+        const { data: updateData, error: updateError } = await supabase
+          .from('company_profile')
+          .update({ logo_url: newUrl })
+          .eq('id', targetId)
+          .select();
+
+        if (updateError) {
+          console.error('[saveCompanyProfileLogo] Supabase update error:', updateError);
+          logSupabaseError('update company_profile.logo_url', updateError);
+          throw updateError;
+        }
+
+        await db.company_profile.update(localId, { id: targetId, logo_url: newUrl, synced: true });
+        updatedLocal = await db.company_profile.get(localId);
+      } else {
+        const payload = {
+          name: updatedLocal.name || COMPANY_CONFIG.name,
+          owner_name: updatedLocal.owner_name || COMPANY_CONFIG.ownerName,
+          address: updatedLocal.address || COMPANY_CONFIG.address,
+          phone: updatedLocal.phone || COMPANY_CONFIG.phone,
+          email: updatedLocal.email || COMPANY_CONFIG.email,
+          logo_url: newUrl,
+          signature_url: updatedLocal.signature_url || '',
+          default_greeting: updatedLocal.default_greeting || COMPANY_CONFIG.defaultGreeting,
+          default_closing: updatedLocal.default_closing || COMPANY_CONFIG.defaultClosing
+        };
+
+        const { data: insertData, error: insertError } = await supabase
+          .from('company_profile')
+          .insert(payload)
+          .select()
+          .single();
+
+        if (insertError) {
+          console.error('[saveCompanyProfileLogo] Supabase insert error:', insertError);
+          logSupabaseError('insert initial company_profile for logo', insertError);
+          throw insertError;
+        }
+
+        await db.company_profile.update(localId, { id: insertData.id, logo_url: newUrl, synced: true });
+        updatedLocal = await db.company_profile.get(localId);
+      }
+    } catch (err) {
+      console.error('[saveCompanyProfileLogo] Cloud persistence error:', err);
+      throw err;
+    }
+  }
+
+  return updatedLocal;
 }
 
 // ----------------- CUSTOMERS -----------------
@@ -716,12 +972,7 @@ export async function getNextQuoteNo() {
 // ----------------- MATERIALS -----------------
 
 export const DEFAULT_MATERIAL_CATEGORIES = [
-  'Furniture',
-  'Fabrication',
-  'Hardware',
-  'Electrical',
-  'Raw Material',
-  'Services'
+  'Furniture'
 ];
 
 function filterMaterials(list, searchQuery = '', categoryFilter = 'All', stockFilter = 'All') {
@@ -804,9 +1055,11 @@ export async function getMaterials(searchQuery = '', categoryFilter = 'All', sto
         console.warn('Error reading categories from Dexie:', e);
       }
       const catMap = new Map();
+      const catByName = new Map();
       categories.forEach((c) => {
         if (c.id) catMap.set(String(c.id).toLowerCase(), c.name);
         if (c.localId) catMap.set(String(c.localId), c.name);
+        if (c.name) catByName.set(c.name.trim().toLowerCase(), c.id);
       });
 
       // Merge with local Dexie materials to preserve local image_url
@@ -830,7 +1083,16 @@ export async function getMaterials(searchQuery = '', categoryFilter = 'All', sto
         const local = localMatMap.get(String(m.id || m.localId || '').toLowerCase()) ||
                       localMatByName.get(normName);
         const resolvedImage = m.image_url || meta.image_url || local?.image_url || KNOWN_MATERIAL_IMAGES[normName] || null;
-        const resolvedCategory = meta.category || m.category || (m.category_id ? catMap.get(String(m.category_id).toLowerCase()) : null) || local?.category || '';
+        const demoSet = new Set(DEMO_CATEGORIES_TO_PURGE);
+        let resolvedCategory = meta.category || m.category || (m.category_id ? catMap.get(String(m.category_id).toLowerCase()) : null) || local?.category || '';
+        if (demoSet.has(resolvedCategory.trim().toLowerCase())) {
+          resolvedCategory = '';
+        }
+
+        let resolvedCategoryId = m.category_id || local?.category_id || (resolvedCategory ? catByName.get(resolvedCategory.toLowerCase()) : null) || null;
+        if (!resolvedCategory) {
+          resolvedCategoryId = null;
+        }
 
         // If local record didn't have image_url but we resolved one, update local cache in background
         if (local && !local.image_url && resolvedImage) {
@@ -839,9 +1101,10 @@ export async function getMaterials(searchQuery = '', categoryFilter = 'All', sto
 
         return {
           ...m,
+          category_id: resolvedCategoryId,
+          category: resolvedCategory,
           description: meta.description, // Clean text without <!--v_meta:...-->
-          image_url: resolvedImage,
-          category: resolvedCategory
+          image_url: resolvedImage
         };
       });
 
@@ -870,21 +1133,32 @@ export async function getMaterialsLocal(searchQuery = '', categoryFilter = 'All'
     ]);
 
     const catMap = new Map();
+    const catByName = new Map();
     categories.forEach((c) => {
       if (c.id) catMap.set(String(c.id).toLowerCase(), c.name);
       if (c.localId) catMap.set(String(c.localId), c.name);
+      if (c.name) catByName.set(c.name.trim().toLowerCase(), c.id);
     });
 
+    const demoSet = new Set(DEMO_CATEGORIES_TO_PURGE);
     const enriched = all.map((m) => {
       const normName = (m.name || '').trim().toLowerCase();
       const meta = decodeMaterialDescription(m.description);
       const resolvedImage = m.image_url || meta.image_url || KNOWN_MATERIAL_IMAGES[normName] || null;
-      const resolvedCategory = meta.category || m.category || (m.category_id ? catMap.get(String(m.category_id).toLowerCase()) : null) || '';
+      let resolvedCategory = meta.category || m.category || (m.category_id ? catMap.get(String(m.category_id).toLowerCase()) : null) || '';
+      if (demoSet.has(resolvedCategory.trim().toLowerCase())) {
+        resolvedCategory = '';
+      }
+      let resolvedCategoryId = m.category_id || (resolvedCategory ? catByName.get(resolvedCategory.toLowerCase()) : null) || null;
+      if (!resolvedCategory) {
+        resolvedCategoryId = null;
+      }
       return {
         ...m,
+        category_id: resolvedCategoryId,
+        category: resolvedCategory,
         description: meta.description,
-        image_url: resolvedImage,
-        category: resolvedCategory
+        image_url: resolvedImage
       };
     });
 
@@ -900,13 +1174,26 @@ export async function getMaterialsLocal(searchQuery = '', categoryFilter = 'All'
  */
 export async function getMaterialCategoriesLocal() {
   try {
-    return await db.material_categories.filter((c) => !c.is_deleted).toArray();
+    const demoSet = new Set(DEMO_CATEGORIES_TO_PURGE);
+    const list = await db.material_categories.filter((c) => !c.is_deleted).toArray();
+    const map = new Map();
+    list.forEach((c) => {
+      const norm = (c.name || '').trim().toLowerCase();
+      if (norm && !demoSet.has(norm)) {
+        if (!map.has(norm) || (c.id && !map.get(norm).id)) {
+          map.set(norm, c);
+        }
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   } catch (e) {
     return [];
   }
 }
 
 export async function getMaterialCategories() {
+  const demoSet = new Set(DEMO_CATEGORIES_TO_PURGE);
+
   // If Supabase is reachable, read from Supabase
   if (navigator.onLine && isSupabaseConfigured && supabase) {
     try {
@@ -928,28 +1215,29 @@ export async function getMaterialCategories() {
 
         const map = new Map();
         localCats.forEach((c) => {
-          const key = (c.id || c.name || '').toLowerCase();
-          if (key) map.set(key, c);
+          const norm = (c.name || '').trim().toLowerCase();
+          if (norm && !demoSet.has(norm)) {
+            map.set(norm, c);
+          }
         });
         cloudCategories.forEach((c) => {
-          const key = (c.id || c.name || '').toLowerCase();
-          if (key) map.set(key, c);
+          const norm = (c.name || '').trim().toLowerCase();
+          if (norm && !demoSet.has(norm)) {
+            const existingLocal = map.get(norm);
+            map.set(norm, {
+              ...existingLocal,
+              ...c,
+              localId: existingLocal?.localId || undefined,
+              synced: true
+            });
+          }
         });
-
-        if (map.size === 0) {
-          await seedAndMigrateMaterialCategories();
-          const seeded = await db.material_categories.filter((c) => !c.is_deleted).toArray();
-          seeded.forEach((c) => {
-            const key = (c.id || c.name || '').toLowerCase();
-            if (key) map.set(key, c);
-          });
-        }
 
         // Background sync to Dexie
         syncFromSupabase().catch((e) => console.warn('[Sync] Background sync error:', e));
 
         const list = Array.from(map.values()).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-        if (list.length > 0) return list;
+        return list;
       }
     } catch (err) {
       console.warn('[dataService] Supabase unreachable for categories, falling back to Dexie:', err);
@@ -958,15 +1246,22 @@ export async function getMaterialCategories() {
 
   // Offline fallback: read active categories from Dexie local cache
   try {
-    let list = await db.material_categories.filter((c) => !c.is_deleted).toArray();
-    if (list.length === 0) {
-      await seedAndMigrateMaterialCategories();
-      list = await db.material_categories.filter((c) => !c.is_deleted).toArray();
-    }
-    return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const list = await db.material_categories
+      .filter((c) => !c.is_deleted && !demoSet.has((c.name || '').trim().toLowerCase()))
+      .toArray();
+    const map = new Map();
+    list.forEach((c) => {
+      const norm = (c.name || '').trim().toLowerCase();
+      if (norm && !demoSet.has(norm)) {
+        if (!map.has(norm) || (c.id && !map.get(norm).id)) {
+          map.set(norm, c);
+        }
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   } catch (err) {
     console.warn('[Dexie] getMaterialCategories fallback error:', err);
-    return DEFAULT_MATERIAL_CATEGORIES.map((name) => ({ id: name, name }));
+    return [];
   }
 }
 
@@ -987,7 +1282,9 @@ export async function saveMaterialCategory(catData) {
       c.id !== targetId &&
       c.localId !== targetLocalId
   );
-  if (duplicate) {
+
+  // If renaming an existing category to an existing name, prevent collision
+  if (duplicate && (targetId || targetLocalId)) {
     throw new Error(`Category "${trimmedName}" already exists`);
   }
 
@@ -1047,37 +1344,88 @@ export async function saveMaterialCategory(catData) {
 
     return updated;
   } else {
-    // Adding New Category
-    const newId = generateOfflineUuid();
-    const payload = {
-      id: newId,
-      name: trimmedName,
-      created_at: new Date().toISOString(),
-      synced: false
-    };
+    // Adding New Category (or reusing existing if duplicate)
+    if (duplicate) {
+      if ((!duplicate.synced || !duplicate.id || duplicate.id.startsWith('offline-')) && navigator.onLine && isSupabaseConfigured && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('material_categories')
+            .upsert({ name: trimmedName }, { onConflict: 'name', ignoreDuplicates: false })
+            .select()
+            .single();
 
-    const localId = await db.material_categories.add(payload);
-    payload.localId = localId;
+          if (!error && data) {
+            await db.material_categories.update(duplicate.localId, { id: data.id, synced: true });
+            return { ...duplicate, id: data.id, synced: true };
+          }
+        } catch (e) {
+          console.warn('[saveMaterialCategory] Non-fatal upsert check for existing duplicate:', e);
+        }
+      }
+      return duplicate;
+    }
 
-    // If online, insert to Supabase
+    let finalId = generateOfflineUuid();
+    let isSynced = false;
+
+    // If online, upsert to Supabase with onConflict: 'name' and ignoreDuplicates: false
     if (navigator.onLine && isSupabaseConfigured && supabase) {
       try {
         const { data, error } = await supabase
           .from('material_categories')
-          .insert({ id: newId, name: trimmedName })
+          .upsert({ name: trimmedName }, { onConflict: 'name', ignoreDuplicates: false })
           .select()
           .single();
 
         if (!error && data) {
-          await db.material_categories.update(localId, { id: data.id, synced: true });
-          payload.id = data.id;
-          payload.synced = true;
+          finalId = data.id;
+          isSynced = true;
+        } else if (error) {
+          console.warn('[saveMaterialCategory] Cloud upsert notice:', error?.message || error);
+          // If conflict or error, fetch existing row by name
+          try {
+            const { data: existing } = await supabase
+              .from('material_categories')
+              .select('id, name')
+              .ilike('name', trimmedName)
+              .maybeSingle();
+
+            if (existing) {
+              finalId = existing.id;
+              isSynced = true;
+            }
+          } catch (fetchErr) {
+            console.warn('[saveMaterialCategory] Error querying existing category:', fetchErr);
+          }
         }
       } catch (sbErr) {
         console.warn('[saveMaterialCategory] Error saving cloud category:', sbErr);
       }
     }
 
+    // Check if Dexie already has this category by finalId or name to prevent duplicates
+    const existingLocal =
+      (await db.material_categories.where('id').equals(finalId).first()) ||
+      (await db.material_categories.filter((c) => !c.is_deleted && c.name.toLowerCase().trim() === trimmedName.toLowerCase()).first());
+
+    if (existingLocal) {
+      await db.material_categories.update(existingLocal.localId, {
+        id: finalId,
+        name: trimmedName,
+        synced: isSynced
+      });
+      return { ...existingLocal, id: finalId, name: trimmedName, synced: isSynced };
+    }
+
+    const payload = {
+      id: finalId,
+      name: trimmedName,
+      created_at: new Date().toISOString(),
+      synced: isSynced
+    };
+
+    const localId = await db.material_categories.add(payload);
+    payload.localId = localId;
     return payload;
   }
 }

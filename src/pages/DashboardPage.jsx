@@ -82,7 +82,7 @@ export default function DashboardPage() {
               </div>
               <div>
                 <h4 className="text-[14px] font-bold text-[#0B1B3F] dark:text-white group-hover:text-[#2F6FED] transition-colors">
-                  Materials Catalog
+                  Inventory Catalog
                 </h4>
                 <p className="text-[11px] text-[#6B7280] dark:text-gray-400">
                   Manage product categories, unit prices & thumbnails

@@ -57,21 +57,42 @@ export default function QuotationPreviewPage() {
 
   // Load quotation & profile
   useEffect(() => {
+    let isMounted = true;
     async function load() {
       try {
         const [q, p] = await Promise.all([
           getQuotationById(id),
           getCompanyProfile()
         ]);
-        setQuotation(q);
-        setProfile(p);
+        if (isMounted) {
+          setQuotation(q);
+          setProfile(p);
+        }
       } catch (err) {
         console.error('Error loading quotation for preview:', err);
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     }
     load();
+
+    const handleFocus = async () => {
+      try {
+        const p = await getCompanyProfile();
+        if (isMounted && p) {
+          setProfile((prev) => ({ ...prev, ...p }));
+        }
+      } catch (e) {}
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('visibilitychange', handleFocus);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('visibilitychange', handleFocus);
+    };
   }, [id]);
 
   // Convert logo and signature to Base64 once to eliminate CORS taint & load race

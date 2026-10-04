@@ -32,41 +32,133 @@ db.version(5).stores({
 });
 
 export const DEFAULT_MATERIAL_CATEGORIES = [
-  'Furniture',
-  'Fabrication',
-  'Hardware',
-  'Electrical',
-  'Raw Material',
-  'Services'
+  'Furniture'
 ];
+
+export const DEMO_CATEGORIES_TO_PURGE = [
+  'electrical',
+  'fabrication',
+  'hardware',
+  'raw material',
+  'services'
+];
+
+export async function purgeDemoCategories() {
+  try {
+    const demoNames = new Set(DEMO_CATEGORIES_TO_PURGE);
+
+    // 1. Find all demo categories in Dexie
+    const allCats = await db.material_categories.toArray();
+    const demoCatIds = new Set();
+    const demoCatLocalIds = new Set();
+    const demoCatNames = new Set();
+
+    for (const cat of allCats) {
+      const norm = (cat.name || '').trim().toLowerCase();
+      if (demoNames.has(norm)) {
+        if (cat.id) demoCatIds.add(String(cat.id).toLowerCase());
+        if (cat.localId) demoCatLocalIds.add(String(cat.localId));
+        demoCatNames.add(norm);
+        await db.material_categories.delete(cat.localId);
+      }
+    }
+
+    // 2. Unlink any materials referencing deleted demo categories -> set to Uncategorized
+    const allMats = await db.materials.toArray();
+    for (const mat of allMats) {
+      const matCatId = mat.category_id ? String(mat.category_id).toLowerCase() : null;
+      const matCatName = (mat.category || '').trim().toLowerCase();
+
+      const isDemoCat =
+        (matCatId && demoCatIds.has(matCatId)) ||
+        (mat.category_id && demoCatLocalIds.has(String(mat.category_id))) ||
+        (matCatName && demoCatNames.has(matCatName)) ||
+        demoNames.has(matCatName);
+
+      if (isDemoCat) {
+        console.log(`[Migration] Unlinking material "${mat.name}" from demo category "${mat.category}" -> Uncategorized`);
+        await db.materials.update(mat.localId, {
+          category: null,
+          category_id: null,
+          synced: false
+        });
+      }
+    }
+
+    // 3. Ensure 'Furniture' category exists if there are furniture items (Chair, Desk, Dine, Table)
+    let furnitureCat = await db.material_categories
+      .filter((c) => !c.is_deleted && (c.name || '').trim().toLowerCase() === 'furniture')
+      .first();
+
+    const furnitureItemNames = new Set(['chair', 'desk', 'dine', 'table', 'laptop table']);
+    const furnitureMaterials = allMats.filter((m) => {
+      const name = (m.name || '').trim().toLowerCase();
+      return furnitureItemNames.has(name) || (m.category || '').trim().toLowerCase() === 'furniture';
+    });
+
+    if (furnitureMaterials.length > 0) {
+      if (!furnitureCat) {
+        const id = generateOfflineUuid();
+        const localId = await db.material_categories.add({
+          id,
+          name: 'Furniture',
+          created_at: new Date().toISOString(),
+          synced: false,
+          is_deleted: false
+        });
+        furnitureCat = { id, localId, name: 'Furniture' };
+      }
+
+      for (const fMat of furnitureMaterials) {
+        if (!fMat.category_id || fMat.category !== 'Furniture') {
+          await db.materials.update(fMat.localId, {
+            category: 'Furniture',
+            category_id: furnitureCat.id
+          });
+        }
+      }
+    }
+
+    // 4. If online and Supabase is configured, delete demo categories from Supabase too
+    if (typeof navigator !== 'undefined' && navigator.onLine && isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('material_categories')
+          .delete()
+          .in('name', ['Electrical', 'Fabrication', 'Hardware', 'Raw Material', 'Services', 'electrical', 'fabrication', 'hardware', 'raw material', 'services']);
+      } catch (sbErr) {
+        console.warn('[Migration] Note: Cloud category cleanup requires authenticated user or RLS policy:', sbErr?.message || sbErr);
+      }
+    }
+
+    console.log('[Migration] Demo categories purged successfully.');
+  } catch (err) {
+    console.warn('[Migration] Error purging demo categories:', err);
+  }
+}
 
 export async function seedAndMigrateMaterialCategories() {
   try {
     const existing = await db.material_categories.filter((c) => !c.is_deleted).toArray();
     const catMap = new Map();
-
-    if (existing.length === 0) {
-      for (const name of DEFAULT_MATERIAL_CATEGORIES) {
-        const id = generateOfflineUuid();
-        const localId = await db.material_categories.add({
-          id,
-          name,
-          created_at: new Date().toISOString(),
-          synced: false
-        });
-        catMap.set(name.toLowerCase(), { id, localId, name });
-      }
-    } else {
-      existing.forEach((c) => {
-        catMap.set(c.name.toLowerCase(), c);
-      });
-    }
+    existing.forEach((c) => {
+      catMap.set(c.name.toLowerCase(), c);
+    });
 
     // Migrate any existing materials that have a category name but no category_id
     const materials = await db.materials.toArray();
     for (const mat of materials) {
       if (!mat.category_id && mat.category && mat.category.trim()) {
         const catName = mat.category.trim();
+        // Do not recreate demo categories
+        if (DEMO_CATEGORIES_TO_PURGE.includes(catName.toLowerCase())) {
+          await db.materials.update(mat.localId, {
+            category_id: null,
+            category: null
+          });
+          continue;
+        }
+
         let cat = catMap.get(catName.toLowerCase());
         if (!cat) {
           const newId = generateOfflineUuid();
@@ -86,7 +178,7 @@ export async function seedAndMigrateMaterialCategories() {
       }
     }
   } catch (err) {
-    console.warn('[Migration] Error seeding/migrating material categories:', err);
+    console.warn('[Migration] Error migrating material categories:', err);
   }
 }
 
@@ -315,15 +407,19 @@ export async function refreshFromSupabase() {
         .select('*')
         .order('name');
 
-      if (!mcErr && remoteCategories !== null && remoteCategories.length > 0) {
-        const remoteCatIdSet = new Set(remoteCategories.map((c) => c.id));
+      if (!mcErr && remoteCategories !== null) {
+        const demoNames = new Set(DEMO_CATEGORIES_TO_PURGE);
+        const validRemote = remoteCategories.filter(
+          (c) => !demoNames.has((c.name || '').trim().toLowerCase())
+        );
+        const remoteCatIdSet = new Set(validRemote.map((c) => c.id));
         const localSyncedCats = await db.material_categories.filter((c) => c.synced !== false).toArray();
         for (const lc of localSyncedCats) {
-          if (!remoteCatIdSet.has(lc.id)) {
+          if (demoNames.has((lc.name || '').trim().toLowerCase()) || !remoteCatIdSet.has(lc.id)) {
             await db.material_categories.delete(lc.localId);
           }
         }
-        for (const rc of remoteCategories) {
+        for (const rc of validRemote) {
           const local = await db.material_categories.where('id').equals(rc.id).first();
           if (local) {
             await db.material_categories.update(local.localId, { ...rc, synced: true, is_deleted: false });
@@ -366,15 +462,23 @@ export async function refreshFromSupabase() {
         const normName = (rm.name || '').trim().toLowerCase();
 
         // Resolve Category
+        const demoNames = new Set(DEMO_CATEGORIES_TO_PURGE);
         let resolvedCategory = meta.category ||
           rm.category ||
           (rm.category_id ? catMap.get(String(rm.category_id).toLowerCase()) : null) ||
-          '';
+          null;
+
+        if (resolvedCategory && demoNames.has(resolvedCategory.trim().toLowerCase())) {
+          resolvedCategory = null;
+        }
 
         let resolvedCategoryId = rm.category_id || meta.category_id || null;
+        if (!resolvedCategory) {
+          resolvedCategoryId = null;
+        }
 
         // Auto-register category into Dexie if it's missing on this device (e.g. mobile hasn't created it yet)
-        if (resolvedCategory && !catMap.has(resolvedCategory.toLowerCase())) {
+        if (resolvedCategory && !catMap.has(resolvedCategory.toLowerCase()) && !demoNames.has(resolvedCategory.toLowerCase())) {
           const generatedId = resolvedCategoryId || generateOfflineUuid();
           try {
             await db.material_categories.add({
@@ -405,8 +509,8 @@ export async function refreshFromSupabase() {
           ...rm,
           description: meta.description, // Clean human-readable text
           raw_description: rm.description,
-          category: resolvedCategory || local?.category || 'Furniture',
-          category_id: resolvedCategoryId || local?.category_id || null,
+          category: resolvedCategory || (local?.category && !demoNames.has(local.category.toLowerCase()) ? local.category : null),
+          category_id: resolvedCategoryId || (local?.category_id && !demoNames.has(String(local.category).toLowerCase()) ? local.category_id : null),
           image_url: resolvedImage,
           in_stock: rm.in_stock !== undefined && rm.in_stock !== null ? rm.in_stock : true,
           stock_qty: rm.stock_qty !== undefined && rm.stock_qty !== null ? rm.stock_qty : null,
@@ -615,28 +719,89 @@ export async function syncPendingChanges() {
         try {
           if (cat.is_deleted) {
             if (cat.id) {
-              await supabase.from('material_categories').delete().eq('id', cat.id);
+              try {
+                await supabase.from('material_categories').delete().eq('id', cat.id);
+              } catch (delErr) {
+                console.warn('[Sync] Non-fatal category remote delete notice:', delErr?.message || delErr);
+              }
             }
             await db.material_categories.delete(cat.localId);
             continue;
           }
 
-          const payload = {
-            name: cat.name
-          };
-          if (cat.id) payload.id = cat.id;
+          const trimmedCatName = (cat.name || '').trim();
+          if (!trimmedCatName) {
+            await db.material_categories.delete(cat.localId);
+            continue;
+          }
+
+          // Prevent local duplicate rows for the same category name
+          const existingSynced = await db.material_categories
+            .filter((c) => !c.is_deleted && c.synced && c.localId !== cat.localId && (c.name || '').trim().toLowerCase() === trimmedCatName.toLowerCase())
+            .first();
+
+          if (existingSynced) {
+            if (cat.id && cat.id !== existingSynced.id) {
+              try {
+                const linked = await db.materials.where('category_id').equals(cat.id).toArray();
+                for (const m of linked) {
+                  await db.materials.update(m.localId, { category_id: existingSynced.id });
+                }
+              } catch (remapErr) {
+                console.warn('[Sync] Non-fatal category remapping error:', remapErr);
+              }
+            }
+            await db.material_categories.delete(cat.localId);
+            continue;
+          }
 
           const { data, error } = await supabase
             .from('material_categories')
-            .upsert(payload)
+            .upsert({ name: trimmedCatName }, { onConflict: 'name', ignoreDuplicates: false })
             .select()
             .single();
 
           if (!error && data) {
-            await db.material_categories.update(cat.localId, { id: data.id, synced: true });
+            const oldId = cat.id;
+            const newId = data.id;
+            await db.material_categories.update(cat.localId, { id: newId, name: trimmedCatName, synced: true });
+
+            if (oldId && oldId !== newId) {
+              try {
+                const linkedMaterials = await db.materials.where('category_id').equals(oldId).toArray();
+                for (const m of linkedMaterials) {
+                  await db.materials.update(m.localId, { category_id: newId });
+                }
+              } catch (mErr) {
+                console.warn('[Sync] Non-fatal updating linked materials category ID:', mErr);
+              }
+            }
+          } else if (error) {
+            console.warn('[Sync] Non-fatal category sync notice (resolving conflict):', error?.message || error);
+            try {
+              const { data: existing } = await supabase
+                .from('material_categories')
+                .select('id, name')
+                .ilike('name', trimmedCatName)
+                .maybeSingle();
+
+              if (existing) {
+                const oldId = cat.id;
+                const newId = existing.id;
+                await db.material_categories.update(cat.localId, { id: newId, name: existing.name || trimmedCatName, synced: true });
+                if (oldId && oldId !== newId) {
+                  const linkedMaterials = await db.materials.where('category_id').equals(oldId).toArray();
+                  for (const m of linkedMaterials) {
+                    await db.materials.update(m.localId, { category_id: newId });
+                  }
+                }
+              }
+            } catch (fetchErr) {
+              console.warn('[Sync] Error checking existing category by name:', fetchErr);
+            }
           }
         } catch (e) {
-          console.warn('[Sync] Failed to sync category:', e);
+          console.warn('[Sync] Non-fatal error syncing individual category:', e?.message || e);
         }
       }
     } catch (catSyncErr) {
@@ -817,6 +982,55 @@ export async function syncPendingChanges() {
       }
     }
 
+    // E. Sync Unsynced Company Profile
+    try {
+      const unsyncedProfile = await db.company_profile.filter((p) => p.synced === false).first();
+      if (unsyncedProfile) {
+        let remoteProfileId = unsyncedProfile.id;
+        const { data: remoteRows } = await supabase.from('company_profile').select('id').limit(1);
+        if (remoteRows && remoteRows.length > 0) {
+          remoteProfileId = remoteRows[0].id;
+        }
+
+        const profilePayload = {
+          name: unsyncedProfile.name || COMPANY_CONFIG.name,
+          owner_name: unsyncedProfile.owner_name || COMPANY_CONFIG.ownerName,
+          address: unsyncedProfile.address || COMPANY_CONFIG.address,
+          phone: unsyncedProfile.phone || COMPANY_CONFIG.phone,
+          email: unsyncedProfile.email || COMPANY_CONFIG.email,
+          logo_url: unsyncedProfile.logo_url || COMPANY_CONFIG.logoUrl,
+          signature_url: unsyncedProfile.signature_url || '',
+          default_greeting: unsyncedProfile.default_greeting || COMPANY_CONFIG.defaultGreeting,
+          default_closing: unsyncedProfile.default_closing || COMPANY_CONFIG.defaultClosing
+        };
+
+        if (remoteProfileId) {
+          const { data, error } = await supabase
+            .from('company_profile')
+            .update(profilePayload)
+            .eq('id', remoteProfileId)
+            .select()
+            .single();
+
+          if (!error && data) {
+            await db.company_profile.update(unsyncedProfile.localId, { id: data.id, synced: true });
+          }
+        } else {
+          const { data, error } = await supabase
+            .from('company_profile')
+            .insert(profilePayload)
+            .select()
+            .single();
+
+          if (!error && data) {
+            await db.company_profile.update(unsyncedProfile.localId, { id: data.id, synced: true });
+          }
+        }
+      }
+    } catch (profSyncErr) {
+      console.warn('[Sync] Failed syncing company profile:', profSyncErr);
+    }
+
     // Success reset retry
     retryAttempt = 0;
   } catch (overallErr) {
@@ -843,8 +1057,9 @@ if (typeof window !== 'undefined') {
   });
 }
 
-// Initialize immediately: run purge migration, seed categories, then perform fresh sync from Supabase
+// Initialize immediately: run purge migrations, seed categories, then perform fresh sync from Supabase
 purgeInvalidLocalRecords()
+  .then(() => purgeDemoCategories())
   .then(() => seedAndMigrateMaterialCategories())
   .then(() => {
     if (typeof navigator !== 'undefined' && navigator.onLine) {
