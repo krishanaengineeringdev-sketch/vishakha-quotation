@@ -4,10 +4,22 @@ import {
   generateOfflineUuid,
   syncPendingChanges,
   syncFromSupabase,
+  refreshFromSupabase,
   seedAndMigrateMaterialCategories,
-  isCloudImageUrlSupported
+  isCloudImageUrlSupported,
+  decodeMaterialDescription,
+  encodeMaterialDescription,
+  KNOWN_MATERIAL_IMAGES
 } from '../db/localDb';
 import { COMPANY_CONFIG } from '../config/companyConfig';
+
+export {
+  refreshFromSupabase,
+  syncFromSupabase,
+  decodeMaterialDescription,
+  encodeMaterialDescription,
+  KNOWN_MATERIAL_IMAGES
+};
 
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -812,17 +824,13 @@ export async function getMaterials(searchQuery = '', categoryFilter = 'All', sto
         if (m.name) localMatByName.set(m.name.trim().toLowerCase(), m);
       });
 
-      // Default/verified images for established catalog items if local cache was flushed during schema updates
-      const KNOWN_MATERIAL_IMAGES = {
-        desk: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/assets/material-1791085577224.webp',
-        table: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/materials/material-1791086920926.webp'
-      };
-
       const enriched = combined.map((m) => {
         const normName = (m.name || '').trim().toLowerCase();
+        const meta = decodeMaterialDescription(m.description);
         const local = localMatMap.get(String(m.id || m.localId || '').toLowerCase()) ||
                       localMatByName.get(normName);
-        const resolvedImage = m.image_url || local?.image_url || KNOWN_MATERIAL_IMAGES[normName] || null;
+        const resolvedImage = m.image_url || meta.image_url || local?.image_url || KNOWN_MATERIAL_IMAGES[normName] || null;
+        const resolvedCategory = meta.category || m.category || (m.category_id ? catMap.get(String(m.category_id).toLowerCase()) : null) || local?.category || '';
 
         // If local record didn't have image_url but we resolved one, update local cache in background
         if (local && !local.image_url && resolvedImage) {
@@ -831,13 +839,14 @@ export async function getMaterials(searchQuery = '', categoryFilter = 'All', sto
 
         return {
           ...m,
+          description: meta.description, // Clean text without <!--v_meta:...-->
           image_url: resolvedImage,
-          category: m.category || (m.category_id ? catMap.get(String(m.category_id).toLowerCase()) : null) || ''
+          category: resolvedCategory
         };
       });
 
       // Mirror to Dexie cache in the background (drops inactive/deleted items)
-      syncFromSupabase().catch((e) => console.warn('[Sync] Background sync error:', e));
+      refreshFromSupabase().catch((e) => console.warn('[Sync] Background sync error:', e));
 
       return filterMaterials(enriched, searchQuery, categoryFilter, stockFilter);
     } catch (err) {
@@ -866,18 +875,16 @@ export async function getMaterialsLocal(searchQuery = '', categoryFilter = 'All'
       if (c.localId) catMap.set(String(c.localId), c.name);
     });
 
-    const KNOWN_MATERIAL_IMAGES = {
-      desk: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/assets/material-1791085577224.webp',
-      table: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/materials/material-1791086920926.webp'
-    };
-
     const enriched = all.map((m) => {
       const normName = (m.name || '').trim().toLowerCase();
-      const resolvedImage = m.image_url || KNOWN_MATERIAL_IMAGES[normName] || null;
+      const meta = decodeMaterialDescription(m.description);
+      const resolvedImage = m.image_url || meta.image_url || KNOWN_MATERIAL_IMAGES[normName] || null;
+      const resolvedCategory = meta.category || m.category || (m.category_id ? catMap.get(String(m.category_id).toLowerCase()) : null) || '';
       return {
         ...m,
+        description: meta.description,
         image_url: resolvedImage,
-        category: m.category || (m.category_id ? catMap.get(String(m.category_id).toLowerCase()) : null) || ''
+        category: resolvedCategory
       };
     });
 
@@ -1207,8 +1214,13 @@ export async function saveMaterial(matData) {
         } catch (e) {}
       }
 
-      // Note: 'category' and 'image_url' were dropped from materials table in Supabase.
-      // Only include valid columns in cloud upsert:
+      // Encode category and image_url into description metadata tag for guaranteed cross-device sync
+      const encodedDesc = encodeMaterialDescription(payload.description, {
+        category: payload.category,
+        category_id: validCatId || payload.category_id,
+        image_url: payload.image_url
+      });
+
       const cloudHasImageCol = await isCloudImageUrlSupported();
       const sbPayload = {
         id: payload.id,
@@ -1217,7 +1229,7 @@ export async function saveMaterial(matData) {
         hsn: payload.code || null,
         unit: payload.unit,
         rate: payload.rate,
-        description: payload.description,
+        description: encodedDesc,
         category_id: validCatId,
         in_stock: payload.in_stock,
         stock_qty: payload.stock_qty,

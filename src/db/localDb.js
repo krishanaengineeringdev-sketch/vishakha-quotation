@@ -119,6 +119,72 @@ export async function isCloudImageUrlSupported() {
   return isCloudImageUrlAvailable;
 }
 
+// ----------------- MATERIAL DESCRIPTION METADATA HELPERS -----------------
+// Embeds category and image_url into the description text (HTML comment tag <!--v_meta:...-->)
+// so that cross-device synchronization works immediately without breaking on missing cloud columns or RLS policies.
+const META_REGEX = /<!--v_meta:(.*?)-->/s;
+
+export const KNOWN_MATERIAL_IMAGES = {
+  desk: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/assets/material-1791081981366.webp',
+  table: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/materials/material-1791086920926.webp',
+  chair: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/assets/material-1791085527468.webp',
+  dine: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/assets/material-1791085577224.webp'
+};
+
+export function decodeMaterialDescription(rawDesc) {
+  if (!rawDesc || typeof rawDesc !== 'string') {
+    return {
+      description: '',
+      category: null,
+      category_id: null,
+      image_url: null
+    };
+  }
+
+  const match = rawDesc.match(META_REGEX);
+  if (!match) {
+    return {
+      description: rawDesc,
+      category: null,
+      category_id: null,
+      image_url: null
+    };
+  }
+
+  const cleanDescription = rawDesc.replace(META_REGEX, '').trim();
+  try {
+    const meta = JSON.parse(match[1]);
+    return {
+      description: cleanDescription,
+      category: meta.cat || null,
+      category_id: meta.cat_id || null,
+      image_url: meta.img || null
+    };
+  } catch (err) {
+    return {
+      description: cleanDescription,
+      category: null,
+      category_id: null,
+      image_url: null
+    };
+  }
+}
+
+export function encodeMaterialDescription(desc, { category, category_id, image_url } = {}) {
+  const cleanDesc = (desc || '').replace(META_REGEX, '').trim();
+  const meta = {};
+  if (category) meta.cat = category;
+  if (category_id) meta.cat_id = category_id;
+  if (image_url) meta.img = image_url;
+
+  if (Object.keys(meta).length === 0) {
+    return cleanDesc;
+  }
+
+  const tag = `<!--v_meta:${JSON.stringify(meta)}-->`;
+  return cleanDesc ? `${cleanDesc}\n${tag}` : tag;
+}
+
 // ----------------- ONE-TIME MIGRATION: PURGE INVALID / SEED RECORDS -----------------
 export async function purgeInvalidLocalRecords() {
   try {
@@ -220,36 +286,29 @@ export async function purgeInvalidLocalRecords() {
   }
 }
 
-// ----------------- SYNC FROM SUPABASE (MIRROR CLOUD AS SOURCE OF TRUTH) -----------------
-export async function syncFromSupabase() {
+// ----------------- FRESH SYNC FROM SUPABASE (CLOUD AS SOURCE OF TRUTH) -----------------
+/**
+ * Forces a fresh pull from Supabase to overwrite local Dexie cache with the shared cloud state.
+ * Conflict rule:
+ * - Unsynced local drafts (synced: false) are preserved or pushed first.
+ * - All other records (synced !== false) are overwritten by the cloud source of truth.
+ * - Materials descriptions are decoded to extract categories and uploaded image URLs.
+ * - Categories are auto-registered into Dexie so chips immediately appear on mobile.
+ */
+export async function refreshFromSupabase() {
   if (!isSupabaseConfigured || !supabase || !navigator.onLine) {
     return;
   }
 
   try {
-    console.log('[Dexie Sync] Mirroring cloud data from Supabase to Dexie...');
+    console.log('[Dexie Sync] Performing fresh sync from Supabase...');
+    const pendingBefore = await getPendingSyncCount();
+    broadcastSyncStatus(true, pendingBefore);
 
-    // 1. Fetch Customers
-    const { data: remoteCustomers, error: cErr } = await supabase.from('customers').select('*');
-    if (!cErr && remoteCustomers !== null) {
-      const remoteCustIdSet = new Set(remoteCustomers.map((c) => c.id));
-      const localSyncedCusts = await db.customers.filter((c) => c.synced !== false).toArray();
-      for (const lc of localSyncedCusts) {
-        if (!remoteCustIdSet.has(lc.id)) {
-          await db.customers.delete(lc.localId);
-        }
-      }
-      for (const rc of remoteCustomers) {
-        const local = await db.customers.where('id').equals(rc.id).first();
-        if (local) {
-          await db.customers.update(local.localId, { ...rc, synced: true });
-        } else {
-          await db.customers.add({ ...rc, synced: true });
-        }
-      }
-    }
+    // 1. Push any pending local drafts first so local changes are preserved and sent to cloud
+    await syncPendingChanges();
 
-    // 2a. Fetch Material Categories first so materials can resolve category names
+    // 2. Fetch Material Categories from Supabase
     try {
       const { data: remoteCategories, error: mcErr } = await supabase
         .from('material_categories')
@@ -267,9 +326,9 @@ export async function syncFromSupabase() {
         for (const rc of remoteCategories) {
           const local = await db.material_categories.where('id').equals(rc.id).first();
           if (local) {
-            await db.material_categories.update(local.localId, { ...rc, synced: true });
+            await db.material_categories.update(local.localId, { ...rc, synced: true, is_deleted: false });
           } else {
-            await db.material_categories.add({ ...rc, synced: true });
+            await db.material_categories.add({ ...rc, synced: true, is_deleted: false });
           }
         }
       }
@@ -277,61 +336,132 @@ export async function syncFromSupabase() {
       console.warn('[Dexie Sync] Material categories sync notice:', catErr);
     }
 
-    // 2b. Fetch Active Materials (soft delete is_active = true)
+    // 3. Fetch Active Materials from Supabase
     const { data: remoteMaterials, error: mErr } = await supabase
       .from('materials')
       .select('*')
-      .eq('is_active', true);
+      .eq('is_active', true)
+      .order('name');
 
-    if (!mErr && remoteMaterials !== null && remoteMaterials.length > 0) {
+    if (!mErr && remoteMaterials !== null) {
       const allLocalCats = await db.material_categories.toArray();
       const catMap = new Map();
       allLocalCats.forEach((c) => {
         if (c.id) catMap.set(String(c.id).toLowerCase(), c.name);
         if (c.localId) catMap.set(String(c.localId), c.name);
+        if (c.name) catMap.set(c.name.trim().toLowerCase(), c.name);
       });
 
       const remoteMatIdSet = new Set(remoteMaterials.map((m) => m.id));
       const localSyncedMats = await db.materials.filter((m) => m.synced !== false).toArray();
       for (const lm of localSyncedMats) {
-        // Drop items that are no longer active or present in Supabase
+        // Drop local materials that are deleted or marked inactive on Supabase
         if (!remoteMatIdSet.has(lm.id)) {
           await db.materials.delete(lm.localId);
         }
       }
+
       for (const rm of remoteMaterials) {
+        const meta = decodeMaterialDescription(rm.description);
+        const normName = (rm.name || '').trim().toLowerCase();
+
+        // Resolve Category
+        let resolvedCategory = meta.category ||
+          rm.category ||
+          (rm.category_id ? catMap.get(String(rm.category_id).toLowerCase()) : null) ||
+          '';
+
+        let resolvedCategoryId = rm.category_id || meta.category_id || null;
+
+        // Auto-register category into Dexie if it's missing on this device (e.g. mobile hasn't created it yet)
+        if (resolvedCategory && !catMap.has(resolvedCategory.toLowerCase())) {
+          const generatedId = resolvedCategoryId || generateOfflineUuid();
+          try {
+            await db.material_categories.add({
+              id: generatedId,
+              name: resolvedCategory,
+              created_at: new Date().toISOString(),
+              synced: true,
+              is_deleted: false
+            });
+            catMap.set(resolvedCategory.toLowerCase(), resolvedCategory);
+            catMap.set(String(generatedId).toLowerCase(), resolvedCategory);
+            resolvedCategoryId = generatedId;
+          } catch (e) {
+            // Already present or added concurrently
+          }
+        }
+
         const local = (await db.materials.where('id').equals(rm.id).first()) ||
                       (rm.name ? await db.materials.where('name').equalsIgnoreCase(rm.name.trim()).first() : null);
-        const resolvedCategory = (rm.category_id ? catMap.get(String(rm.category_id).toLowerCase()) : null) || rm.category || local?.category || '';
+
+        const resolvedImage = rm.image_url ||
+          meta.image_url ||
+          local?.image_url ||
+          KNOWN_MATERIAL_IMAGES[normName] ||
+          null;
+
         const matRecord = {
           ...rm,
-          category: resolvedCategory,
-          category_id: rm.category_id || null,
-          image_url: rm.image_url || local?.image_url || null,
+          description: meta.description, // Clean human-readable text
+          raw_description: rm.description,
+          category: resolvedCategory || local?.category || 'Furniture',
+          category_id: resolvedCategoryId || local?.category_id || null,
+          image_url: resolvedImage,
           in_stock: rm.in_stock !== undefined && rm.in_stock !== null ? rm.in_stock : true,
           stock_qty: rm.stock_qty !== undefined && rm.stock_qty !== null ? rm.stock_qty : null,
+          is_active: true,
           synced: true
         };
+
         if (local) {
-          await db.materials.update(local.localId, matRecord);
+          if (local.synced !== false) {
+            await db.materials.update(local.localId, matRecord);
+          }
         } else {
           await db.materials.add(matRecord);
         }
       }
     }
 
-    // 3. Fetch Company Profile
-    const { data: remoteProfile, error: pErr } = await supabase.from('company_profile').select('*').limit(1).maybeSingle();
-    if (!pErr && remoteProfile) {
-      const local = await db.company_profile.where('id').equals(remoteProfile.id).first() || await db.company_profile.toCollection().first();
-      if (local) {
-        await db.company_profile.update(local.localId, { ...remoteProfile, synced: true });
-      } else {
-        await db.company_profile.add({ ...remoteProfile, synced: true });
+    // 4. Fetch Customers
+    const { data: remoteCustomers, error: cErr } = await supabase.from('customers').select('*');
+    if (!cErr && remoteCustomers !== null) {
+      const remoteCustIdSet = new Set(remoteCustomers.map((c) => c.id));
+      const localSyncedCusts = await db.customers.filter((c) => c.synced !== false).toArray();
+      for (const lc of localSyncedCusts) {
+        if (!remoteCustIdSet.has(lc.id)) {
+          await db.customers.delete(lc.localId);
+        }
+      }
+      for (const rc of remoteCustomers) {
+        const local = await db.customers.where('id').equals(rc.id).first();
+        if (local) {
+          if (local.synced !== false) {
+            await db.customers.update(local.localId, { ...rc, synced: true });
+          }
+        } else {
+          await db.customers.add({ ...rc, synced: true });
+        }
       }
     }
 
-    // 4. Fetch Quotations
+    // 5. Fetch Company Profile
+    try {
+      const { data: remoteProfile, error: pErr } = await supabase.from('company_profile').select('*').limit(1).maybeSingle();
+      if (!pErr && remoteProfile) {
+        const local = (await db.company_profile.where('id').equals(remoteProfile.id).first()) || (await db.company_profile.toCollection().first());
+        if (local) {
+          if (local.synced !== false) {
+            await db.company_profile.update(local.localId, { ...remoteProfile, synced: true });
+          }
+        } else {
+          await db.company_profile.add({ ...remoteProfile, synced: true });
+        }
+      }
+    } catch (profErr) {}
+
+    // 6. Fetch Quotations
     const { data: remoteQuotations, error: qErr } = await supabase
       .from('quotations')
       .select('*')
@@ -357,7 +487,7 @@ export async function syncFromSupabase() {
       }
     }
 
-    // 5. Fetch Quotation Items
+    // 7. Fetch Quotation Items
     const { data: remoteItems, error: iErr } = await supabase.from('quotation_items').select('*');
     if (!iErr && remoteItems !== null && remoteItems.length > 0) {
       const remoteItemIdSet = new Set(remoteItems.map((i) => i.id));
@@ -392,11 +522,23 @@ export async function syncFromSupabase() {
       }
     }
 
-    console.log('[Dexie Sync] Mirror complete.');
+    console.log('[Dexie Sync] Fresh sync complete.');
+
+    // Broadcast refresh events across open tabs/views
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('vishakha_synced_fresh', { detail: { timestamp: Date.now() } }));
+      window.dispatchEvent(new CustomEvent('vishakha_realtime_change', { detail: { table: 'all', eventType: 'SYNC' } }));
+    }
   } catch (err) {
-    console.warn('[Dexie Sync] Sync from Supabase encountered an error:', err);
+    console.warn('[Dexie Sync] refreshFromSupabase encountered an error:', err);
+  } finally {
+    const pendingAfter = await getPendingSyncCount();
+    broadcastSyncStatus(false, pendingAfter);
   }
 }
+
+// Backward-compatible alias
+export const syncFromSupabase = refreshFromSupabase;
 
 // ----------------- SYNC PENDING CHANGES (LOCAL -> SUPABASE) -----------------
 let isSyncing = false;
@@ -524,22 +666,27 @@ export async function syncPendingChanges() {
             ? rawCatId
             : null;
 
-          // Note: The 'category' and 'image_url' columns were dropped from materials table in Supabase.
-          // We only send columns that exist in the cloud schema:
+          // Encode category and image_url into description metadata tag for guaranteed cross-device sync
+          const encodedDesc = encodeMaterialDescription(mat.description, {
+            category: mat.category,
+            category_id: cleanCatId,
+            image_url: mat.image_url
+          });
+
           const payload = {
             name: mat.name,
             code: mat.code || '',
             hsn: mat.code || mat.hsn || null,
             unit: mat.unit || 'Nos',
             rate: parseFloat(mat.rate) || 0,
-            description: mat.description || '',
+            description: encodedDesc,
             category_id: cleanCatId,
             in_stock: mat.in_stock !== false,
             stock_qty: mat.stock_qty !== undefined && mat.stock_qty !== null && mat.stock_qty !== '' ? parseFloat(mat.stock_qty) : null,
             is_active: mat.is_active !== false
           };
 
-          // Only send image_url to Supabase if the column exists in cloud schema
+          // Also send image_url if the column exists in cloud schema
           const cloudHasImageCol = await isCloudImageUrlSupported();
           if (cloudHasImageCol && mat.image_url) {
             payload.image_url = mat.image_url;
@@ -696,11 +843,11 @@ if (typeof window !== 'undefined') {
   });
 }
 
-// Initialize immediately: run purge migration, seed categories, then mirror from Supabase
+// Initialize immediately: run purge migration, seed categories, then perform fresh sync from Supabase
 purgeInvalidLocalRecords()
   .then(() => seedAndMigrateMaterialCategories())
   .then(() => {
     if (typeof navigator !== 'undefined' && navigator.onLine) {
-      syncFromSupabase();
+      refreshFromSupabase();
     }
   });
