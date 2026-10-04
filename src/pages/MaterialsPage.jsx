@@ -2,10 +2,12 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   getMaterials,
+  getMaterialsLocal,
   saveMaterial,
   deleteMaterial,
   updateMaterialStock,
   getMaterialCategories,
+  getMaterialCategoriesLocal,
   saveMaterialCategory,
   deleteMaterialCategory,
   DEFAULT_MATERIAL_CATEGORIES
@@ -55,7 +57,7 @@ const cardVariants = {
   }
 };
 
-function MaterialThumbnail({ src, alt, className = 'w-10 h-10', iconSize = 'w-5 h-5' }) {
+function MaterialThumbnail({ src, alt, className = 'w-10 h-10', iconSize = 'w-5 h-5', width = 40, height = 40 }) {
   if (!src) {
     return (
       <div className={`${className} rounded-[8px] overflow-hidden bg-slate-200/80 dark:bg-gray-800 border border-slate-200 dark:border-gray-700/80 shrink-0 flex items-center justify-center shadow-2xs`}>
@@ -68,7 +70,10 @@ function MaterialThumbnail({ src, alt, className = 'w-10 h-10', iconSize = 'w-5 
     <div className={`${className} rounded-[8px] overflow-hidden bg-slate-200/80 dark:bg-gray-800 border border-slate-200 dark:border-gray-700/80 shrink-0 flex items-center justify-center shadow-2xs relative`}>
       <img
         src={src}
-        alt={alt || ''}
+        alt={alt || 'Material thumbnail'}
+        loading="lazy"
+        width={width}
+        height={height}
         className="w-full h-full object-cover"
         onError={(e) => {
           e.currentTarget.style.display = 'none';
@@ -136,21 +141,40 @@ export default function MaterialsPage() {
   const [deletingId, setDeletingId] = useState(null);
   const [materialToDelete, setMaterialToDelete] = useState(null);
 
-  // Fetch categories from service
+  // Fetch categories: Instant local render + background Supabase sync
   const fetchCategories = useCallback(async () => {
     try {
-      const list = await getMaterialCategories();
-      setCategories(list || []);
+      // 1. Instant local render
+      const local = await getMaterialCategoriesLocal();
+      if (local && local.length > 0) {
+        setCategories(local);
+      }
+      // 2. Background sync if online
+      if (navigator.onLine) {
+        const list = await getMaterialCategories();
+        if (list) setCategories(list);
+      }
     } catch (e) {
       console.warn('Error fetching categories:', e);
     }
   }, []);
 
-  // Fetch all materials from Supabase / Dexie
+  // Fetch all materials: Instant local render (0ms) + background Supabase sync
   const fetchMaterials = useCallback(async () => {
     try {
-      const data = await getMaterials('', 'All', 'All');
-      setAllMaterials(data || []);
+      // 1. Instant local render
+      const local = await getMaterialsLocal('', 'All', 'All');
+      if (local && local.length > 0) {
+        setAllMaterials(local);
+        setLoading(false);
+      }
+      // 2. Background sync if online
+      if (navigator.onLine) {
+        const data = await getMaterials('', 'All', 'All');
+        if (data) setAllMaterials(data);
+      } else if (!local || local.length === 0) {
+        setAllMaterials([]);
+      }
     } catch (e) {
       console.warn('Error fetching materials:', e);
     } finally {
@@ -174,6 +198,18 @@ export default function MaterialsPage() {
     };
     window.addEventListener('online', handleOnline);
     return () => window.removeEventListener('online', handleOnline);
+  }, [fetchMaterials, fetchCategories]);
+
+  // Supabase Realtime live sync listener: updates instantly without manual pull-to-refresh
+  useEffect(() => {
+    const handleRealtime = (e) => {
+      if (e.detail?.table === 'materials' || e.detail?.table === 'material_categories') {
+        fetchMaterials();
+        fetchCategories();
+      }
+    };
+    window.addEventListener('vishakha_realtime_change', handleRealtime);
+    return () => window.removeEventListener('vishakha_realtime_change', handleRealtime);
   }, [fetchMaterials, fetchCategories]);
 
   // Compute item counts per category (and uncategorized) across all materials

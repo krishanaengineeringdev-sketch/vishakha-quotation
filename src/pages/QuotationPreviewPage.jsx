@@ -488,6 +488,8 @@ export default function QuotationPreviewPage() {
                       src={logoUrl}
                       alt={`${companyName} Logo`}
                       crossOrigin="anonymous"
+                      width="102"
+                      height="102"
                       className="max-w-full max-h-full object-contain"
                       style={{ objectFit: 'contain' }}
                     />
@@ -734,6 +736,8 @@ export default function QuotationPreviewPage() {
                     src={signatureUrl}
                     alt="Authorized Signature"
                     crossOrigin="anonymous"
+                    width="100"
+                    height="48"
                     className="w-full h-full object-contain"
                     style={{ width: '100px', height: '48px', objectFit: 'contain' }}
                   />

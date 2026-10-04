@@ -40,6 +40,8 @@ export default function Header({ title, showBack = false, onBack }) {
               <img
                 src={COMPANY_CONFIG.logoUrl}
                 alt={`${COMPANY_CONFIG.name} Logo`}
+                width="32"
+                height="32"
                 className="w-8 h-8 rounded-lg object-contain shadow-xs bg-white p-0.5"
               />
               <div>

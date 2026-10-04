@@ -214,6 +214,14 @@ export async function getQuotations(searchQuery = '') {
   }
 
   // Offline fallback: read from Dexie local cache
+  return getQuotationsLocal(searchQuery);
+}
+
+/**
+ * Instant local-first reader: reads quotations directly from Dexie IndexedDB
+ * with zero network delay for immediate mobile UI rendering.
+ */
+export async function getQuotationsLocal(searchQuery = '') {
   try {
     const [allQuotes, allCustomers] = await Promise.all([
       db.quotations.toArray(),
@@ -235,7 +243,7 @@ export async function getQuotations(searchQuery = '') {
 
     return filterQuotations(list, searchQuery);
   } catch (err) {
-    console.warn('[Dexie] getQuotations fallback error:', err);
+    console.warn('[Dexie] getQuotationsLocal error:', err);
     return [];
   }
 }
@@ -776,8 +784,13 @@ export async function getMaterials(searchQuery = '', categoryFilter = 'All', sto
 
       const combined = [...unsyncedMats, ...(cloudMaterials || [])];
 
-      // Enrich materials with human-readable category name from material_categories / Dexie
-      const categories = await getMaterialCategories();
+      // Enrich materials with human-readable category name from Dexie (avoids redundant network round-trip)
+      let categories = [];
+      try {
+        categories = await db.material_categories.filter((c) => !c.is_deleted).toArray();
+      } catch (e) {
+        console.warn('Error reading categories from Dexie:', e);
+      }
       const catMap = new Map();
       categories.forEach((c) => {
         if (c.id) catMap.set(String(c.id).toLowerCase(), c.name);
@@ -833,13 +846,55 @@ export async function getMaterials(searchQuery = '', categoryFilter = 'All', sto
   }
 
   // Offline fallback: read active materials from Dexie local cache
+  return getMaterialsLocal(searchQuery, categoryFilter, stockFilter);
+}
+
+/**
+ * Instant local-first reader: reads materials directly from Dexie IndexedDB
+ * with zero network delay for immediate mobile UI rendering.
+ */
+export async function getMaterialsLocal(searchQuery = '', categoryFilter = 'All', stockFilter = 'All') {
   try {
-    const all = await db.materials
-      .filter((m) => m.is_active !== false)
-      .toArray();
-    return filterMaterials(all, searchQuery, categoryFilter, stockFilter);
+    const [all, categories] = await Promise.all([
+      db.materials.filter((m) => m.is_active !== false).toArray(),
+      db.material_categories.filter((c) => !c.is_deleted).toArray()
+    ]);
+
+    const catMap = new Map();
+    categories.forEach((c) => {
+      if (c.id) catMap.set(String(c.id).toLowerCase(), c.name);
+      if (c.localId) catMap.set(String(c.localId), c.name);
+    });
+
+    const KNOWN_MATERIAL_IMAGES = {
+      desk: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/assets/material-1791085577224.webp',
+      table: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/materials/material-1791086920926.webp'
+    };
+
+    const enriched = all.map((m) => {
+      const normName = (m.name || '').trim().toLowerCase();
+      const resolvedImage = m.image_url || KNOWN_MATERIAL_IMAGES[normName] || null;
+      return {
+        ...m,
+        image_url: resolvedImage,
+        category: m.category || (m.category_id ? catMap.get(String(m.category_id).toLowerCase()) : null) || ''
+      };
+    });
+
+    return filterMaterials(enriched, searchQuery, categoryFilter, stockFilter);
   } catch (err) {
-    console.warn('[Dexie] getMaterials fallback error:', err);
+    console.warn('[Dexie] getMaterialsLocal error:', err);
+    return [];
+  }
+}
+
+/**
+ * Instant local-first reader for material categories
+ */
+export async function getMaterialCategoriesLocal() {
+  try {
+    return await db.material_categories.filter((c) => !c.is_deleted).toArray();
+  } catch (e) {
     return [];
   }
 }

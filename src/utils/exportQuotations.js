@@ -1,4 +1,3 @@
-import * as XLSX from 'xlsx';
 import { db } from '../db/localDb';
 
 /**
@@ -11,6 +10,9 @@ import { db } from '../db/localDb';
  * @returns {Promise<{ success: boolean, count: number, quoteCount: number, fileName: string }>}
  */
 export async function exportQuotationsToExcel(filteredQuotes = null) {
+  // Dynamic import of xlsx ensures zero impact on initial app bundle size
+  const XLSX = await import('xlsx');
+
   // 1. Fetch from Dexie local storage
   const [allDbQuotes, allCustomers, allItems] = await Promise.all([
     db.quotations.toArray(),

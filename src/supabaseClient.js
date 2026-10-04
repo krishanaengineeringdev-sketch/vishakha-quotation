@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import imageCompression from 'browser-image-compression';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
@@ -86,10 +87,31 @@ export async function uploadAsset(file, path) {
 }
 
 // Helper to compress image before uploading to optimize storage & mobile offline Dexie performance
-export async function compressImage(file, maxDimension = 600, quality = 0.85) {
+export async function compressImage(file, maxDimension = 800, quality = 0.8) {
   if (!file || typeof window === 'undefined' || !file.type || !file.type.startsWith('image/')) {
     return file;
   }
+
+  // 1. Try modern browser-image-compression library first
+  try {
+    const options = {
+      maxSizeMB: 0.8,
+      maxWidthOrHeight: maxDimension,
+      useWebWorker: true,
+      fileType: 'image/webp',
+      initialQuality: quality
+    };
+    const compressedBlob = await imageCompression(file, options);
+    const cleanName = (file.name || 'image').replace(/\.[^/.]+$/, '');
+    return new File([compressedBlob], `${cleanName}.webp`, {
+      type: 'image/webp',
+      lastModified: Date.now()
+    });
+  } catch (err) {
+    console.warn('[compressImage] browser-image-compression worker notice, using canvas fallback:', err);
+  }
+
+  // 2. High-performance HTML5 Canvas Fallback
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -145,7 +167,8 @@ export async function compressImage(file, maxDimension = 600, quality = 0.85) {
 // Storage helper for uploading material images with compression and robust fallback
 export async function uploadMaterialImage(file) {
   if (!file) return null;
-  const compressed = await compressImage(file, 600, 0.85);
+  // Compress to max 800px width and ~80% quality
+  const compressed = await compressImage(file, 800, 0.8);
 
   if (isSupabaseConfigured && supabase) {
     const fileExt = compressed.name ? compressed.name.split('.').pop() : 'webp';

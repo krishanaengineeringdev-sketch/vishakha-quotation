@@ -74,6 +74,8 @@ export default function LoginPage() {
             <img
               src={COMPANY_CONFIG.logoUrl}
               alt={COMPANY_CONFIG.name}
+              width="80"
+              height="80"
               className="w-full h-full object-contain"
             />
           </div>

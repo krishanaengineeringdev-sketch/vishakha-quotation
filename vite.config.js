@@ -36,6 +36,9 @@ export default defineConfig({
         ]
       },
       workbox: {
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
         globPatterns: ['**/*.{js,css,html,woff,woff2}'], // exclude png/ico from precache globs
         runtimeCaching: [
           {
@@ -91,5 +94,20 @@ export default defineConfig({
         ]
       }
     })
-  ]
+  ],
+  build: {
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('html2canvas') || id.includes('jspdf')) {
+            return 'pdf-engine';
+          }
+          if (id.includes('xlsx')) {
+            return 'xlsx-export';
+          }
+        }
+      }
+    }
+  }
 });

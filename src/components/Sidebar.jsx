@@ -63,6 +63,9 @@ export default function Sidebar() {
             <img
               src={COMPANY_CONFIG.logoUrl}
               alt={`${COMPANY_CONFIG.name} Logo`}
+              width="36"
+              height="36"
+              loading="lazy"
               className="max-w-full max-h-full object-contain"
             />
           </div>

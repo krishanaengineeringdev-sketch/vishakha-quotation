@@ -45,7 +45,7 @@ const GST_PRESETS = [
   { label: '28% GST', value: 28 }
 ];
 
-function MaterialThumbnail({ src, alt, className = 'w-10 h-10' }) {
+function MaterialThumbnail({ src, alt, className = 'w-10 h-10', width = 40, height = 40 }) {
   if (!src) {
     return (
       <div className={`${className} rounded-[8px] overflow-hidden bg-slate-100 dark:bg-gray-800 border border-slate-200/80 dark:border-gray-700 shrink-0 flex items-center justify-center shadow-2xs`}>
@@ -58,7 +58,10 @@ function MaterialThumbnail({ src, alt, className = 'w-10 h-10' }) {
     <div className={`${className} rounded-[8px] overflow-hidden bg-slate-100 dark:bg-gray-800 border border-slate-200/80 dark:border-gray-700 shrink-0 flex items-center justify-center shadow-2xs relative`}>
       <img
         src={src}
-        alt={alt || ''}
+        alt={alt || 'Material thumbnail'}
+        loading="lazy"
+        width={width}
+        height={height}
         className="w-full h-full object-cover"
         onError={(e) => {
           e.currentTarget.style.display = 'none';

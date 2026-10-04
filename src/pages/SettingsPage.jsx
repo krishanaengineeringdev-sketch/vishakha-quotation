@@ -222,6 +222,9 @@ export default function SettingsPage() {
                     <img
                       src={logoUrl || COMPANY_CONFIG.logoUrl}
                       alt="Logo preview"
+                      width="88"
+                      height="88"
+                      loading="lazy"
                       className="max-w-full max-h-full object-contain"
                     />
                   </div>
@@ -251,6 +254,9 @@ export default function SettingsPage() {
                       <img
                         src={signatureUrl}
                         alt="Signature preview"
+                        width="120"
+                        height="50"
+                        loading="lazy"
                         className="max-w-full max-h-full object-contain"
                       />
                     ) : (
@@ -278,6 +284,9 @@ export default function SettingsPage() {
                     <img
                       src={COMPANY_CONFIG.logoUrl}
                       alt={COMPANY_CONFIG.name}
+                      width="48"
+                      height="48"
+                      loading="lazy"
                       className="w-full h-full object-contain"
                     />
                   </div>

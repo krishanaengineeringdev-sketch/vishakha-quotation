@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { syncPendingChanges, syncFromSupabase } from '../db/localDb';
 import {
   getQuotations,
+  getQuotationsLocal,
   getQuotationById,
   getCompanyProfile,
   deleteQuotation,
@@ -93,11 +94,25 @@ export default function QuotationListPage() {
     }
   };
 
-  // Fetch quotations from Supabase / Dexie cache
+  // Fetch quotations: Instant local-first render (0ms) + background Supabase sync
   const fetchQuotations = useCallback(async () => {
     try {
-      const data = await getQuotations(searchQuery);
-      setQuotations(data || []);
+      // 1. Instant local-first render
+      const local = await getQuotationsLocal(searchQuery);
+      if (local && local.length > 0) {
+        setQuotations(local);
+        setLoading(false);
+      }
+
+      // 2. Background cloud sync if online
+      if (navigator.onLine) {
+        const data = await getQuotations(searchQuery);
+        if (data) {
+          setQuotations(data);
+        }
+      } else if (!local || local.length === 0) {
+        setQuotations([]);
+      }
     } catch (e) {
       console.warn('Error fetching quotations:', e);
     } finally {
@@ -116,6 +131,17 @@ export default function QuotationListPage() {
     };
     window.addEventListener('online', handleOnline);
     return () => window.removeEventListener('online', handleOnline);
+  }, [fetchQuotations]);
+
+  // Supabase Realtime live sync listener: updates instantly without page refresh
+  useEffect(() => {
+    const handleRealtime = (e) => {
+      if (e.detail?.table === 'quotations' || e.detail?.table === 'quotation_items') {
+        fetchQuotations();
+      }
+    };
+    window.addEventListener('vishakha_realtime_change', handleRealtime);
+    return () => window.removeEventListener('vishakha_realtime_change', handleRealtime);
   }, [fetchQuotations]);
 
   const showToast = (message, type = 'success') => {

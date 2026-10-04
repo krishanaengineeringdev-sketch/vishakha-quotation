@@ -364,6 +364,8 @@ export const PrintableQuotationDoc = forwardRef(function PrintableQuotationDoc(
               src={logoUrl}
               alt={`${companyName} Logo`}
               crossOrigin="anonymous"
+              width="96"
+              height="96"
               className="max-w-full max-h-full object-contain"
               style={{ objectFit: 'contain' }}
             />
@@ -621,6 +623,8 @@ export const PrintableQuotationDoc = forwardRef(function PrintableQuotationDoc(
               src={signatureUrl}
               alt="Authorized Signature"
               crossOrigin="anonymous"
+              width="100"
+              height="48"
               className="w-full h-full object-contain"
               style={{ width: '100px', height: '48px', objectFit: 'contain' }}
             />
