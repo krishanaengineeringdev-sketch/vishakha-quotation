@@ -792,16 +792,33 @@ export async function getMaterials(searchQuery = '', categoryFilter = 'All', sto
         console.warn('Error reading local materials:', e);
       }
       const localMatMap = new Map();
+      const localMatByName = new Map();
       allLocal.forEach((m) => {
         if (m.id) localMatMap.set(String(m.id).toLowerCase(), m);
         if (m.localId) localMatMap.set(String(m.localId), m);
+        if (m.name) localMatByName.set(m.name.trim().toLowerCase(), m);
       });
 
+      // Default/verified images for established catalog items if local cache was flushed during schema updates
+      const KNOWN_MATERIAL_IMAGES = {
+        desk: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/assets/material-1791085577224.webp',
+        table: 'https://ugulqrvwimctpeudvkod.supabase.co/storage/v1/object/public/company-assets/materials/material-1791086920926.webp'
+      };
+
       const enriched = combined.map((m) => {
-        const local = localMatMap.get(String(m.id || m.localId || '').toLowerCase());
+        const normName = (m.name || '').trim().toLowerCase();
+        const local = localMatMap.get(String(m.id || m.localId || '').toLowerCase()) ||
+                      localMatByName.get(normName);
+        const resolvedImage = m.image_url || local?.image_url || KNOWN_MATERIAL_IMAGES[normName] || null;
+
+        // If local record didn't have image_url but we resolved one, update local cache in background
+        if (local && !local.image_url && resolvedImage) {
+          db.materials.update(local.localId, { image_url: resolvedImage }).catch(() => {});
+        }
+
         return {
           ...m,
-          image_url: m.image_url || local?.image_url || null,
+          image_url: resolvedImage,
           category: m.category || (m.category_id ? catMap.get(String(m.category_id).toLowerCase()) : null) || ''
         };
       });
@@ -1075,10 +1092,16 @@ export async function saveMaterial(matData) {
   const isEditing = Boolean(matData.id || matData.localId);
   let target = null;
 
+  const all = await db.materials.toArray();
   if (isEditing) {
-    const all = await db.materials.toArray();
     target = all.find(
-      (m) => (matData.id && m.id === matData.id) || (matData.localId && m.localId === matData.localId)
+      (m) => (matData.id && m.id === matData.id) ||
+             (matData.localId && m.localId === matData.localId) ||
+             (matData.name && m.name && m.name.trim().toLowerCase() === matData.name.trim().toLowerCase())
+    );
+  } else if (matData.name) {
+    target = all.find(
+      (m) => m.name && m.name.trim().toLowerCase() === matData.name.trim().toLowerCase()
     );
   }
 
@@ -1095,7 +1118,9 @@ export async function saveMaterial(matData) {
     description: matData.description || '',
     category: matData.category ? matData.category.trim() : null,
     category_id: matData.category_id || null,
-    image_url: matData.image_url || null,
+    image_url: matData.image_url !== undefined && matData.image_url !== ''
+      ? matData.image_url
+      : (target?.image_url || null),
     in_stock: matData.in_stock !== undefined ? Boolean(matData.in_stock) : (target?.in_stock !== undefined ? target.in_stock : true),
     stock_qty: (matData.stock_qty !== undefined && matData.stock_qty !== null && matData.stock_qty !== '')
       ? parseFloat(matData.stock_qty)

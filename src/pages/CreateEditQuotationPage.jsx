@@ -46,13 +46,7 @@ const GST_PRESETS = [
 ];
 
 function MaterialThumbnail({ src, alt, className = 'w-10 h-10' }) {
-  const [hasError, setHasError] = useState(false);
-
-  useEffect(() => {
-    setHasError(false);
-  }, [src]);
-
-  if (!src || hasError) {
+  if (!src) {
     return (
       <div className={`${className} rounded-[8px] overflow-hidden bg-slate-100 dark:bg-gray-800 border border-slate-200/80 dark:border-gray-700 shrink-0 flex items-center justify-center shadow-2xs`}>
         <Package className="w-5 h-5 text-[#6B7280] dark:text-gray-400" />
@@ -61,14 +55,20 @@ function MaterialThumbnail({ src, alt, className = 'w-10 h-10' }) {
   }
 
   return (
-    <div className={`${className} rounded-[8px] overflow-hidden bg-slate-100 dark:bg-gray-800 border border-slate-200/80 dark:border-gray-700 shrink-0 flex items-center justify-center shadow-2xs`}>
+    <div className={`${className} rounded-[8px] overflow-hidden bg-slate-100 dark:bg-gray-800 border border-slate-200/80 dark:border-gray-700 shrink-0 flex items-center justify-center shadow-2xs relative`}>
       <img
         src={src}
         alt={alt || ''}
         className="w-full h-full object-cover"
-        loading="lazy"
-        onError={() => setHasError(true)}
+        onError={(e) => {
+          e.currentTarget.style.display = 'none';
+          const fallback = e.currentTarget.parentElement?.querySelector('.thumbnail-placeholder');
+          if (fallback) fallback.style.display = 'flex';
+        }}
       />
+      <div className="thumbnail-placeholder w-full h-full hidden items-center justify-center">
+        <Package className="w-5 h-5 text-[#6B7280] dark:text-gray-400" />
+      </div>
     </div>
   );
 }

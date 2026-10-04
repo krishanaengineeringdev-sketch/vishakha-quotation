@@ -56,13 +56,7 @@ const cardVariants = {
 };
 
 function MaterialThumbnail({ src, alt, className = 'w-10 h-10', iconSize = 'w-5 h-5' }) {
-  const [hasError, setHasError] = useState(false);
-
-  useEffect(() => {
-    setHasError(false);
-  }, [src]);
-
-  if (!src || hasError) {
+  if (!src) {
     return (
       <div className={`${className} rounded-[8px] overflow-hidden bg-slate-200/80 dark:bg-gray-800 border border-slate-200 dark:border-gray-700/80 shrink-0 flex items-center justify-center shadow-2xs`}>
         <Package className={`${iconSize} text-[#6B7280] dark:text-gray-400`} />
@@ -71,14 +65,20 @@ function MaterialThumbnail({ src, alt, className = 'w-10 h-10', iconSize = 'w-5 
   }
 
   return (
-    <div className={`${className} rounded-[8px] overflow-hidden bg-slate-200/80 dark:bg-gray-800 border border-slate-200 dark:border-gray-700/80 shrink-0 flex items-center justify-center shadow-2xs`}>
+    <div className={`${className} rounded-[8px] overflow-hidden bg-slate-200/80 dark:bg-gray-800 border border-slate-200 dark:border-gray-700/80 shrink-0 flex items-center justify-center shadow-2xs relative`}>
       <img
         src={src}
         alt={alt || ''}
         className="w-full h-full object-cover"
-        loading="lazy"
-        onError={() => setHasError(true)}
+        onError={(e) => {
+          e.currentTarget.style.display = 'none';
+          const fallback = e.currentTarget.parentElement?.querySelector('.thumbnail-placeholder');
+          if (fallback) fallback.style.display = 'flex';
+        }}
       />
+      <div className="thumbnail-placeholder w-full h-full hidden items-center justify-center">
+        <Package className={`${iconSize} text-[#6B7280] dark:text-gray-400`} />
+      </div>
     </div>
   );
 }

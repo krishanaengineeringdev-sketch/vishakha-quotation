@@ -22,7 +22,12 @@ db.version(3).stores({
 });
 
 db.version(4).stores({
-  materials: '++localId, id, name, code, category, category_id, in_stock, synced',
+  materials: '++localId, id, name, code, category, category_id, image_url, in_stock, synced',
+  material_categories: '++localId, id, name, synced, is_deleted'
+});
+
+db.version(5).stores({
+  materials: '++localId, id, name, code, category, category_id, image_url, in_stock, synced',
   material_categories: '++localId, id, name, synced, is_deleted'
 });
 
@@ -295,7 +300,8 @@ export async function syncFromSupabase() {
         }
       }
       for (const rm of remoteMaterials) {
-        const local = await db.materials.where('id').equals(rm.id).first();
+        const local = (await db.materials.where('id').equals(rm.id).first()) ||
+                      (rm.name ? await db.materials.where('name').equalsIgnoreCase(rm.name.trim()).first() : null);
         const resolvedCategory = (rm.category_id ? catMap.get(String(rm.category_id).toLowerCase()) : null) || rm.category || local?.category || '';
         const matRecord = {
           ...rm,
