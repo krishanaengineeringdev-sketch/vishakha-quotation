@@ -133,9 +133,38 @@ export default function SettingsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-white dark:bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#0B1B3F] dark:text-white">
-        <div className="w-8 h-8 border-3 border-[#2F6FED] border-t-transparent rounded-full animate-spin mb-3" />
-        <p className="text-[13px] text-[#6B7280] dark:text-gray-400">Loading settings...</p>
+      <div className="min-h-screen bg-white dark:bg-[#0B1220] flex flex-col pb-24 lg:pb-12 lg:pl-64 transition-colors">
+        <Sidebar />
+        <Header />
+
+        <main className="flex-1 max-w-[480px] lg:max-w-5xl xl:max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-3 sm:pt-6 pb-8 space-y-4">
+          <div className="space-y-1.5 mb-5">
+            <div className="h-6 w-48 skeleton rounded-[6px]" />
+            <div className="h-3.5 w-64 skeleton rounded-[4px]" />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Card 1: Branding */}
+            <div className="bg-[#F3F5F9] dark:bg-[#1A2332] rounded-[16px] p-5 space-y-4 border border-slate-200/80 dark:border-gray-800">
+              <div className="h-5 w-36 skeleton rounded-[6px]" />
+              <div className="flex gap-4 items-center">
+                <div className="w-20 h-20 skeleton rounded-[12px]" />
+                <div className="space-y-2 flex-1">
+                  <div className="h-4 w-32 skeleton rounded-[4px]" />
+                  <div className="h-8 w-24 skeleton rounded-[8px]" />
+                </div>
+              </div>
+            </div>
+
+            {/* Card 2: Company Details */}
+            <div className="bg-[#F3F5F9] dark:bg-[#1A2332] rounded-[16px] p-5 space-y-3 border border-slate-200/80 dark:border-gray-800">
+              <div className="h-5 w-40 skeleton rounded-[6px]" />
+              <div className="h-10 skeleton rounded-[10px]" />
+              <div className="h-10 skeleton rounded-[10px]" />
+              <div className="h-10 skeleton rounded-[10px]" />
+            </div>
+          </div>
+        </main>
       </div>
     );
   }

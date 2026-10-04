@@ -217,38 +217,32 @@ export default function QuotationPreviewPage() {
     setTimeout(() => setFeedbackMsg(''), 3500);
   };
 
-  // Duplicate Action
+  // Duplicate Action: Pre-fill New Quotation form (don't auto-save, let user review first)
   const handleDuplicate = async () => {
     try {
       const nextNo = await getNextQuoteNo();
-      const duplicated = await saveQuotation({
+      const duplicatePayload = {
+        originalQuoteNo: quotation.quote_no,
         quote_no: nextNo,
         quote_date: new Date().toISOString().split('T')[0],
         customerName: quotation.customers?.name || '',
         customerPlace: quotation.customers?.place || '',
         greeting: quotation.greeting || '',
         closing: quotation.closing || '',
-        subtotal: quotation.subtotal,
         discount_percent: quotation.discount_percent || 0,
-        discount_amount: quotation.discount_amount || 0,
         gst_percent: quotation.gst_percent || 0,
-        gst_amount: quotation.gst_amount || 0,
-        grand_total: quotation.grand_total,
         items: (quotation.items || []).map((it) => ({
-          description: it.description,
+          material_id: it.material_id || null,
+          description: it.description || '',
           unit: it.unit || 'Nos',
-          qty: it.qty,
-          price: it.price,
-          total: it.total,
-          material_id: it.material_id || null
+          qty: it.qty || 1,
+          price: it.price !== undefined ? it.price : it.rate || 0,
+          rate: it.price !== undefined ? it.price : it.rate || 0,
+          total: it.total !== undefined ? it.total : it.amount || 0
         }))
-      });
+      };
 
-      if (duplicated && (duplicated.id || duplicated.localId)) {
-        navigate(`/quotation/${duplicated.id || duplicated.localId}`);
-        setFeedbackMsg(`Duplicated as ${nextNo}`);
-        setTimeout(() => setFeedbackMsg(''), 3000);
-      }
+      navigate('/quotation/new', { state: { duplicateFrom: duplicatePayload } });
     } catch (err) {
       console.error('Duplicate error:', err);
       alert('Failed to duplicate quotation.');
@@ -267,9 +261,64 @@ export default function QuotationPreviewPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6 text-[#0B1B3F]">
-        <div className="w-8 h-8 border-3 border-[#2F6FED] border-t-transparent rounded-full animate-spin mb-3" />
-        <p className="text-[13px] text-[#6B7280]">Loading quotation preview...</p>
+      <div className="min-h-screen bg-[#F3F5F9] dark:bg-[#0B1220] flex flex-col pb-20 lg:pl-64 transition-colors">
+        <Sidebar />
+        <Header title="Quotation Preview" showBack={true} onBack={() => navigate('/')} />
+
+        {/* Toolbar Skeleton */}
+        <div className="bg-white dark:bg-[#1A2332] border-b border-slate-200 dark:border-gray-800 px-4 py-3 sticky top-[57px] z-30 shadow-xs">
+          <div className="max-w-2xl xl:max-w-3xl mx-auto flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-1 max-w-sm">
+              <div className="h-11 flex-1 skeleton rounded-[10px]" />
+              <div className="h-11 flex-1 skeleton rounded-[10px]" />
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="h-11 w-11 skeleton rounded-[10px]" />
+              <div className="h-11 w-11 skeleton rounded-[10px]" />
+              <div className="h-11 w-11 skeleton rounded-[10px]" />
+            </div>
+          </div>
+        </div>
+
+        {/* Paper Skeleton */}
+        <main className="flex-1 max-w-2xl xl:max-w-3xl w-full mx-auto p-4 sm:p-6 my-4 bg-white dark:bg-[#1A2332] rounded-[16px] shadow-sm border border-slate-200/80 dark:border-gray-800 space-y-6">
+          <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-100 dark:border-gray-800">
+            <div className="w-16 h-16 skeleton rounded-[10px]" />
+            <div className="space-y-2 text-right">
+              <div className="h-6 w-48 skeleton rounded-[6px] ml-auto" />
+              <div className="h-3.5 w-60 skeleton rounded-[4px] ml-auto" />
+              <div className="h-3 w-40 skeleton rounded-[4px] ml-auto" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 p-4 rounded-[12px] bg-slate-50 dark:bg-[#0B1220]/60">
+            <div className="space-y-2">
+              <div className="h-3 w-20 skeleton rounded-[4px]" />
+              <div className="h-4 w-36 skeleton rounded-[5px]" />
+              <div className="h-3 w-28 skeleton rounded-[4px]" />
+            </div>
+            <div className="space-y-2 text-right">
+              <div className="h-3 w-20 skeleton rounded-[4px] ml-auto" />
+              <div className="h-4 w-32 skeleton rounded-[5px] ml-auto" />
+              <div className="h-3 w-24 skeleton rounded-[4px] ml-auto" />
+            </div>
+          </div>
+
+          <div className="space-y-3 pt-2">
+            <div className="h-8 w-full skeleton rounded-[8px]" />
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-10 w-full skeleton rounded-[6px]" />
+            ))}
+          </div>
+
+          <div className="flex justify-end pt-4 border-t border-slate-100 dark:border-gray-800">
+            <div className="w-56 space-y-2">
+              <div className="h-4 w-full skeleton rounded-[4px]" />
+              <div className="h-4 w-full skeleton rounded-[4px]" />
+              <div className="h-6 w-full skeleton rounded-[6px]" />
+            </div>
+          </div>
+        </main>
       </div>
     );
   }
@@ -316,6 +365,21 @@ export default function QuotationPreviewPage() {
         onBack={() => navigate('/')}
       />
 
+      {/* Full-screen Loading Overlay for document preparation */}
+      {isPreparingPdf && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 dark:bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#1A2332] rounded-[16px] p-6 shadow-2xl flex flex-col items-center gap-3 max-w-xs text-center border border-slate-100 dark:border-gray-800">
+            <div className="w-10 h-10 border-3 border-[#2F6FED] border-t-transparent rounded-full animate-spin" />
+            <div className="text-[15px] font-bold text-[#0B1B3F] dark:text-white">
+              Preparing your document...
+            </div>
+            <p className="text-[12px] text-[#6B7280] dark:text-gray-400">
+              Generating high-resolution print PDF. Please wait a moment.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Feedback Toast */}
       {feedbackMsg && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-[#0B1B3F] text-white text-[13px] font-medium px-4 py-2 rounded-full shadow-lg flex items-center gap-2 print:hidden animate-fade-in">
@@ -337,7 +401,7 @@ export default function QuotationPreviewPage() {
               {isPreparingPdf ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                  <span>Preparing PDF...</span>
+                  <span>Generating PDF...</span>
                 </>
               ) : (
                 <>
@@ -552,30 +616,43 @@ export default function QuotationPreviewPage() {
                   </tr>
                 </thead>
                 <tbody className="text-[11px] sm:text-[13px] divide-y divide-slate-200">
+                  {(() => {
+                    console.log('[Preview] Quotation items:', quotation?.items);
+                    return null;
+                  })()}
+
                   {(quotation.items || []).map((item, index) => (
                     <tr key={item.id || index} className="hover:bg-slate-50">
                       <td className={`px-1 sm:px-2 text-center font-medium text-[#6B7280] border-r border-slate-200 ${itemRowPadding}`}>
                         {item.sl_no || index + 1}
                       </td>
                       <td className={`px-2 sm:px-3 font-medium text-[#0B1B3F] border-r border-slate-200 whitespace-pre-line leading-relaxed break-words ${itemRowPadding}`}>
-                        {item.description}
+                        {item.description || item.name || item.desc || '—'}
                       </td>
                       <td className={`px-1 sm:px-2 text-center text-[#6B7280] font-semibold border-r border-slate-200 whitespace-nowrap ${itemRowPadding}`}>
-                        {item.unit || 'Nos'}
+                        {item.unit || item.uom || 'Nos'}
                       </td>
                       <td className={`px-1 sm:px-2 text-center font-semibold border-r border-slate-200 ${itemRowPadding}`}>
-                        {item.qty}
+                        {item.qty !== undefined && item.qty !== null ? item.qty : (item.quantity ?? 1)}
                       </td>
                       <td className={`px-1.5 sm:px-3 text-right font-semibold border-r border-slate-200 whitespace-nowrap ${itemRowPadding}`}>
-                        {formatIndianCurrency(item.price !== undefined ? item.price : item.rate, '')}
+                        {formatIndianCurrency(item.price !== undefined && item.price !== null ? item.price : item.rate, '')}
                       </td>
                       <td className={`px-2 sm:px-3 text-right font-bold text-[#0B1B3F] whitespace-nowrap ${itemRowPadding}`}>
-                        {formatIndianCurrency(item.total !== undefined ? item.total : item.amount, '')}
+                        {formatIndianCurrency(item.total !== undefined && item.total !== null ? item.total : item.amount, '')}
                       </td>
                     </tr>
                   ))}
 
-                  {Array.from({ length: emptyRowsCount }).map((_, idx) => (
+                  {(!quotation.items || quotation.items.length === 0) && (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-slate-400 font-medium italic">
+                        No line items found for this quotation.
+                      </td>
+                    </tr>
+                  )}
+
+                  {itemsCount > 0 && Array.from({ length: emptyRowsCount }).map((_, idx) => (
                     <tr key={`empty-row-${idx}`} className="border-b border-slate-200/50">
                       <td className={`px-1 sm:px-2 text-center text-transparent border-r border-slate-200/50 select-none ${itemRowPadding}`}>&nbsp;</td>
                       <td className={`px-2 sm:px-3 text-transparent border-r border-slate-200/50 select-none ${itemRowPadding}`}>&nbsp;</td>

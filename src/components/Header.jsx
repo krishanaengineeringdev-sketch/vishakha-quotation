@@ -2,8 +2,8 @@ import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { useOnlineStatus } from '../hooks/useOnlineStatus';
-import { LogOut, Sparkles, Sun, Moon, Wifi, WifiOff } from 'lucide-react';
+import { useSyncStatus } from '../hooks/useSyncStatus';
+import { LogOut, Sparkles, Sun, Moon, Wifi, WifiOff, RefreshCw } from 'lucide-react';
 import { COMPANY_CONFIG } from '../config/companyConfig';
 
 export default function Header({ title, showBack = false, onBack }) {
@@ -11,7 +11,7 @@ export default function Header({ title, showBack = false, onBack }) {
   const location = useLocation();
   const { user, signOut, isDemoMode } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const isOnline = useOnlineStatus();
+  const { isOnline, isSyncing, pendingCount } = useSyncStatus();
 
   const handleBack = () => {
     if (onBack) {
@@ -61,23 +61,44 @@ export default function Header({ title, showBack = false, onBack }) {
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2">
-          {/* Online/Offline Connectivity Dot */}
+          {/* Online/Offline/Sync Connectivity Status */}
           <div
-            title={isOnline ? 'Online — synced with cloud' : 'Offline — saving to local storage'}
+            title={
+              isSyncing
+                ? `Syncing ${pendingCount} offline ${pendingCount === 1 ? 'item' : 'items'} to cloud...`
+                : isOnline
+                ? 'Online — synced with cloud'
+                : `Offline — ${pendingCount > 0 ? `${pendingCount} changes waiting to sync` : 'saving to local storage'}`
+            }
             className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
-              isOnline
+              isSyncing
+                ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-800/80'
+                : isOnline
                 ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80'
                 : 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800/80'
             }`}
           >
-            <span
-              className={`w-2 h-2 rounded-full shrink-0 ${
-                isOnline ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'
-              }`}
-            />
+            {isSyncing ? (
+              <RefreshCw className="w-3 h-3 text-[#2F6FED] animate-spin shrink-0" />
+            ) : (
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 ${
+                  isOnline ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'
+                }`}
+              />
+            )}
             <span className="hidden sm:inline">
-              {isOnline ? 'Online' : 'Offline'}
+              {isSyncing
+                ? `Syncing ${pendingCount > 0 ? `${pendingCount} ${pendingCount === 1 ? 'item' : 'items'}...` : 'changes...'}`
+                : isOnline
+                ? 'Online'
+                : 'Offline'}
             </span>
+            {isSyncing && (
+              <span className="sm:hidden">
+                {pendingCount > 0 ? `Syncing ${pendingCount}...` : 'Syncing...'}
+              </span>
+            )}
           </div>
 
           {/* Theme toggle (Sun / Moon) button */}

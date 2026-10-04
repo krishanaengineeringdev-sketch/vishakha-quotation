@@ -1,9 +1,14 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { FileText, PlusCircle, Settings, Package } from 'lucide-react';
+import { LayoutDashboard, FileText, PlusCircle, Settings, Package } from 'lucide-react';
 
 export default function BottomNav() {
   const navItems = [
+    {
+      to: '/dashboard',
+      label: 'Dashboard',
+      icon: LayoutDashboard
+    },
     {
       to: '/',
       label: 'Quotations',

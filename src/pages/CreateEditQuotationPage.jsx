@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   getQuotationById,
@@ -12,6 +12,7 @@ import {
 } from '../services/dataService';
 import Header from '../components/Header';
 import Sidebar from '../components/Sidebar';
+import CustomDropdown from '../components/CustomDropdown';
 import { formatIndianCurrency, numberToWordsIndian } from '../utils/numberToWords';
 import {
   Plus,
@@ -31,7 +32,8 @@ import {
   Tag,
   Percent,
   Layers,
-  ChevronDown
+  ChevronDown,
+  Copy
 } from 'lucide-react';
 
 const STANDARD_UNITS = ['Nos', 'Kg', 'Meter', 'Sq.ft', 'Set', 'Ltr', 'Box', 'Custom'];
@@ -43,9 +45,39 @@ const GST_PRESETS = [
   { label: '28% GST', value: 28 }
 ];
 
+function MaterialThumbnail({ src, alt, className = 'w-10 h-10' }) {
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [src]);
+
+  if (!src || hasError) {
+    return (
+      <div className={`${className} rounded-[8px] overflow-hidden bg-slate-100 dark:bg-gray-800 border border-slate-200/80 dark:border-gray-700 shrink-0 flex items-center justify-center shadow-2xs`}>
+        <Package className="w-5 h-5 text-[#6B7280] dark:text-gray-400" />
+      </div>
+    );
+  }
+
+  return (
+    <div className={`${className} rounded-[8px] overflow-hidden bg-slate-100 dark:bg-gray-800 border border-slate-200/80 dark:border-gray-700 shrink-0 flex items-center justify-center shadow-2xs`}>
+      <img
+        src={src}
+        alt={alt || ''}
+        className="w-full h-full object-cover"
+        loading="lazy"
+        onError={() => setHasError(true)}
+      />
+    </div>
+  );
+}
+
 export default function CreateEditQuotationPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const duplicateData = location.state?.duplicateFrom;
   const isEdit = Boolean(id);
 
   const [loading, setLoading] = useState(isEdit);
@@ -71,30 +103,12 @@ export default function CreateEditQuotationPage() {
   // Tax and Discount State
   const [discountPercent, setDiscountPercent] = useState(0);
   const [gstPercent, setGstPercent] = useState(0);
-  const [showGstDropdown, setShowGstDropdown] = useState(false);
-  const gstDropdownRef = useRef(null);
-
-  // Close GST dropdown when clicking outside
-  useEffect(() => {
-    function handleClickOutside(event) {
-      if (gstDropdownRef.current && !gstDropdownRef.current.contains(event.target)) {
-        setShowGstDropdown(false);
-      }
-    }
-    if (showGstDropdown) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('touchstart', handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('touchstart', handleClickOutside);
-    };
-  }, [showGstDropdown]);
 
   // Materials Catalog & Picker Modal State
   const [materialsList, setMaterialsList] = useState([]);
   const [showMaterialPicker, setShowMaterialPicker] = useState(false);
   const [materialPickerSearch, setMaterialPickerSearch] = useState('');
+  const [pickerCategory, setPickerCategory] = useState('All');
   const [loadingMaterials, setLoadingMaterials] = useState(false);
 
   // Load defaults or existing quotation
@@ -144,6 +158,48 @@ export default function CreateEditQuotationPage() {
           } else {
             setErrorMessage('Quotation not found.');
           }
+        } else if (duplicateData) {
+          // Duplicated / Repeat Quote: prefill from existing quote with new number and today's date
+          const nextNo = duplicateData.quote_no || (await getNextQuoteNo());
+          setQuoteNo(nextNo);
+          setQuoteDate(new Date().toISOString().split('T')[0]);
+          setCustomerName(duplicateData.customerName || '');
+          setCustomerPlace(duplicateData.customerPlace || '');
+          setGreeting(
+            duplicateData.greeting ||
+              profile?.default_greeting ||
+              'Dear Sir/Mam, Thank you for your valuable inquiry. We are pleased to quote as below:'
+          );
+          setClosing(
+            duplicateData.closing ||
+              profile?.default_closing ||
+              'We hope you find our offer to be in line with your requirement.'
+          );
+          setDiscountPercent(parseFloat(duplicateData.discount_percent) || 0);
+          setGstPercent(parseFloat(duplicateData.gst_percent) || 0);
+
+          if (duplicateData.items && duplicateData.items.length > 0) {
+            setItems(
+              duplicateData.items.map((it, idx) => {
+                const qVal = parseFloat(it.qty) || 1;
+                const pVal =
+                  parseFloat(it.price !== undefined ? it.price : it.rate) || 0;
+                const tVal =
+                  parseFloat(it.total !== undefined ? it.total : it.amount) ||
+                  Math.round(qVal * pVal * 100) / 100;
+                return {
+                  id: generateUuid(),
+                  material_id: it.material_id || null,
+                  description: it.description || it.name || '',
+                  unit: it.unit || 'Nos',
+                  qty: qVal,
+                  price: pVal,
+                  rate: pVal,
+                  total: tVal
+                };
+              })
+            );
+          }
         } else {
           // New quote defaults
           const nextNo = await getNextQuoteNo();
@@ -166,11 +222,12 @@ export default function CreateEditQuotationPage() {
     }
 
     loadData();
-  }, [id, isEdit]);
+  }, [id, isEdit, duplicateData]);
 
   // Refresh materials catalog when opening picker
   const handleOpenMaterialPicker = async () => {
     setMaterialPickerSearch('');
+    setPickerCategory('All');
     setShowMaterialPicker(true);
     setLoadingMaterials(true);
     try {
@@ -314,15 +371,32 @@ export default function CreateEditQuotationPage() {
     setItems((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // Filter materials in picker
+  // Extract unique categories from materialsList
+  const pickerCategories = useMemo(() => {
+    const set = new Set();
+    materialsList.forEach((m) => {
+      if (m.category && m.category.trim()) {
+        set.add(m.category.trim());
+      }
+    });
+    return set.size > 0 ? ['All', ...Array.from(set).sort((a, b) => a.localeCompare(b))] : [];
+  }, [materialsList]);
+
+  // Filter materials in picker by search and category
   const filteredMaterials = materialsList.filter((m) => {
+    if (pickerCategory !== 'All') {
+      const itemCat = (m.category || '').toLowerCase().trim();
+      if (itemCat !== pickerCategory.toLowerCase().trim()) return false;
+    }
+
     const q = materialPickerSearch.toLowerCase().trim();
     if (!q) return true;
     return (
-      m.name?.toLowerCase().includes(q) ||
-      (m.code || m.hsn || '')?.toLowerCase().includes(q) ||
-      m.unit?.toLowerCase().includes(q) ||
-      m.description?.toLowerCase().includes(q)
+      (m.name || '').toLowerCase().includes(q) ||
+      (m.code || m.hsn || '').toLowerCase().includes(q) ||
+      (m.unit || '').toLowerCase().includes(q) ||
+      (m.category || '').toLowerCase().includes(q) ||
+      (m.description || '').toLowerCase().includes(q)
     );
   });
 
@@ -399,9 +473,45 @@ export default function CreateEditQuotationPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-white dark:bg-[#0B1220] flex flex-col items-center justify-center p-6 text-[#0B1B3F] dark:text-white">
-        <div className="w-8 h-8 border-3 border-[#2F6FED] border-t-transparent rounded-full animate-spin mb-3" />
-        <p className="text-[13px] text-[#6B7280] dark:text-gray-400">Loading quotation...</p>
+      <div className="min-h-screen bg-[#F3F5F9] dark:bg-[#0B1220] flex flex-col pb-32 lg:pb-12 lg:pl-64 transition-colors">
+        <Sidebar />
+        <Header title={isEdit ? 'Edit Quotation' : 'New Quotation'} showBack={true} onBack={() => navigate('/')} />
+
+        <main className="flex-1 w-full max-w-[520px] lg:max-w-4xl xl:max-w-5xl mx-auto px-4 sm:px-6 pt-4 pb-12 space-y-4">
+          {/* Card 1: Quotation Details */}
+          <div className="bg-white dark:bg-[#1A2332] rounded-[14px] p-4 border border-slate-200/80 dark:border-gray-800 space-y-3">
+            <div className="h-5 w-36 skeleton rounded-[6px]" />
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-1">
+              <div className="h-10 skeleton rounded-[10px]" />
+              <div className="h-10 skeleton rounded-[10px]" />
+              <div className="h-10 skeleton rounded-[10px] col-span-2 sm:col-span-1" />
+            </div>
+          </div>
+
+          {/* Card 2: Customer Info */}
+          <div className="bg-white dark:bg-[#1A2332] rounded-[14px] p-4 border border-slate-200/80 dark:border-gray-800 space-y-3">
+            <div className="h-5 w-40 skeleton rounded-[6px]" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div className="h-10 skeleton rounded-[10px]" />
+              <div className="h-10 skeleton rounded-[10px]" />
+              <div className="h-10 skeleton rounded-[10px]" />
+              <div className="h-10 skeleton rounded-[10px]" />
+            </div>
+          </div>
+
+          {/* Card 3: Line Items */}
+          <div className="bg-white dark:bg-[#1A2332] rounded-[14px] p-4 border border-slate-200/80 dark:border-gray-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="h-5 w-32 skeleton rounded-[6px]" />
+              <div className="h-8 w-28 skeleton rounded-[8px]" />
+            </div>
+            <div className="space-y-2 pt-1">
+              {[1, 2, 3].map((n) => (
+                <div key={n} className="h-14 skeleton rounded-[10px]" />
+              ))}
+            </div>
+          </div>
+        </main>
       </div>
     );
   }
@@ -428,6 +538,17 @@ export default function CreateEditQuotationPage() {
               <div className="p-3.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded-[10px] flex items-start gap-2.5 text-rose-700 dark:text-rose-300 text-[13px]">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>{errorMessage}</span>
+              </div>
+            )}
+
+            {duplicateData && (
+              <div className="p-3.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900 rounded-[10px] flex items-center justify-between text-blue-900 dark:text-blue-200 text-[13px] shadow-xs">
+                <div className="flex items-center gap-2.5">
+                  <Copy className="w-4 h-4 shrink-0 text-[#2F6FED] dark:text-blue-400" />
+                  <span>
+                    Duplicated from <strong>{duplicateData.originalQuoteNo || 'previous quotation'}</strong>. Pre-filled with items and details. New quote number and today's date assigned.
+                  </span>
+                </div>
               </div>
             )}
 
@@ -659,20 +780,15 @@ export default function CreateEditQuotationPage() {
                         <label className="block text-[11px] font-medium text-[#6B7280] dark:text-gray-400 mb-1">
                           Unit
                         </label>
-                        <select
+                        <CustomDropdown
                           value={isCustomUnit ? 'Custom' : item.unit}
-                          onChange={(e) => {
-                            const val = e.target.value;
+                          onChange={(val) => {
                             handleItemChange(index, 'unit', val === 'Custom' ? '' : val);
                           }}
-                          className="w-full px-1.5 py-2 bg-[#F3F5F9] dark:bg-[#0B1220] focus:bg-white dark:focus:bg-[#0B1220] border border-slate-200 dark:border-gray-700 rounded-[8px] text-[12px] font-semibold text-[#0B1B3F] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#2F6FED] min-touch"
-                        >
-                          {STANDARD_UNITS.map((u) => (
-                            <option key={u} value={u}>
-                              {u}
-                            </option>
-                          ))}
-                        </select>
+                          options={STANDARD_UNITS}
+                          buttonClassName="h-9 px-2 py-1 text-[12px] font-semibold rounded-[8px]"
+                          menuClassName="min-w-[120px]"
+                        />
                       </div>
 
                       <div className="col-span-4">
@@ -777,20 +893,15 @@ export default function CreateEditQuotationPage() {
 
                     {/* Unit Column (90px) */}
                     <div>
-                      <select
+                      <CustomDropdown
                         value={isCustomUnit ? 'Custom' : item.unit}
-                        onChange={(e) => {
-                          const val = e.target.value;
+                        onChange={(val) => {
                           handleItemChange(index, 'unit', val === 'Custom' ? '' : val);
                         }}
-                        className="w-full h-9 px-2 py-1.5 bg-[#F3F5F9] dark:bg-[#0B1220] focus:bg-white dark:focus:bg-[#0B1220] border border-slate-200 dark:border-gray-700 rounded-[8px] text-[12px] font-semibold text-[#0B1B3F] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#2F6FED] cursor-pointer"
-                      >
-                        {STANDARD_UNITS.map((u) => (
-                          <option key={u} value={u}>
-                            {u}
-                          </option>
-                        ))}
-                      </select>
+                        options={STANDARD_UNITS}
+                        buttonClassName="h-9 px-2 py-1 text-[12px] font-semibold rounded-[8px]"
+                        menuClassName="min-w-[120px]"
+                      />
                     </div>
 
                     {/* Qty Stepper Column (110px) - Matching Rate Height (h-9) */}
@@ -963,47 +1074,15 @@ export default function CreateEditQuotationPage() {
               <span className="text-[#6B7280] dark:text-gray-400 font-medium">GST Rate</span>
               <div className="flex items-center gap-2">
                 {/* Custom GST Dropdown */}
-                <div className="relative" ref={gstDropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => setShowGstDropdown((prev) => !prev)}
-                    className="h-8 px-2.5 bg-[#F3F5F9] dark:bg-[#0B1220] border border-slate-200 dark:border-gray-700 hover:border-[#2F6FED] dark:hover:border-[#2F6FED] rounded-[8px] text-[13px] font-semibold text-[#0B1B3F] dark:text-white flex items-center justify-between gap-1.5 transition-all shadow-xs focus:outline-none focus:ring-2 focus:ring-[#2F6FED]/20 cursor-pointer"
-                    aria-expanded={showGstDropdown}
-                    aria-haspopup="listbox"
-                    title="Select GST Rate"
-                  >
-                    <span>{GST_PRESETS.find((p) => p.value === gstPercent)?.label || `${gstPercent}% GST`}</span>
-                    <ChevronDown className={`w-3.5 h-3.5 text-[#6B7280] dark:text-gray-400 transition-transform duration-200 ${showGstDropdown ? 'rotate-180 text-[#2F6FED]' : ''}`} />
-                  </button>
-
-                  {showGstDropdown && (
-                    <div
-                      className="gst-dropdown-menu absolute right-0 top-full mt-1.5 w-[160px] py-1"
-                      role="listbox"
-                    >
-                      {GST_PRESETS.map((preset) => {
-                        const isSelected = preset.value === gstPercent;
-                        return (
-                          <div
-                            key={preset.value}
-                            role="option"
-                            aria-selected={isSelected}
-                            onClick={() => {
-                              setGstPercent(preset.value);
-                              setShowGstDropdown(false);
-                            }}
-                            className={`gst-dropdown-option ${isSelected ? 'selected' : 'text-[#0B1B3F] dark:text-white'}`}
-                          >
-                            <span className={isSelected ? 'font-bold' : 'font-normal'}>
-                              {preset.label}
-                            </span>
-                            {isSelected && <Check className="w-3.5 h-3.5 shrink-0" />}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                <CustomDropdown
+                  value={gstPercent}
+                  onChange={(val) => setGstPercent(val)}
+                  options={GST_PRESETS}
+                  buttonClassName="h-8 px-2.5 text-[13px] font-semibold rounded-[8px]"
+                  menuClassName="w-[160px]"
+                  align="right"
+                  className="relative"
+                />
 
                 <span className="font-semibold text-emerald-700 dark:text-emerald-400 min-w-[70px] text-right">
                   + {formatIndianCurrency(gstAmount, 'Rs. ')}
@@ -1183,12 +1262,46 @@ export default function CreateEditQuotationPage() {
                 </div>
               </div>
 
+              {/* Category Filter Pills inside Picker */}
+              {pickerCategories.length > 0 && (
+                <div className="flex items-center gap-1.5 overflow-x-auto px-3 py-2 bg-[#F3F5F9]/80 dark:bg-[#0B1220]/80 border-b border-slate-100 dark:border-gray-700/60 shrink-0 no-scrollbar">
+                  {pickerCategories.map((cat) => {
+                    const isSelected = pickerCategory.toLowerCase() === cat.toLowerCase();
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setPickerCategory(cat)}
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all shrink-0 cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#2F6FED] text-white shadow-xs'
+                            : 'bg-white dark:bg-[#1A2332] text-[#6B7280] dark:text-gray-400 hover:text-[#0B1B3F] dark:hover:text-white border border-slate-200/60 dark:border-gray-700'
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Materials List */}
               <div className="flex-1 overflow-y-auto p-3 space-y-2 max-h-[50vh]">
                 {loadingMaterials ? (
-                  <div className="py-12 flex flex-col items-center justify-center text-[#6B7280] dark:text-gray-400">
-                    <div className="w-6 h-6 border-2 border-[#2F6FED] border-t-transparent rounded-full animate-spin mb-2" />
-                    <span className="text-[12px]">Loading materials catalog...</span>
+                  <div className="space-y-2 py-1">
+                    {[1, 2, 3, 4].map((n) => (
+                      <div
+                        key={n}
+                        className="p-3 rounded-[10px] bg-slate-50 dark:bg-gray-800/60 border border-slate-200/60 dark:border-gray-700/60 flex items-center justify-between gap-3"
+                      >
+                        <div className="w-9 h-9 skeleton rounded-[8px] shrink-0" />
+                        <div className="flex-1 space-y-1.5">
+                          <div className="h-4 w-32 skeleton rounded-[4px]" />
+                          <div className="h-3 w-20 skeleton rounded-[4px]" />
+                        </div>
+                        <div className="h-4 w-16 skeleton rounded-[4px]" />
+                      </div>
+                    ))}
                   </div>
                 ) : filteredMaterials.length === 0 ? (
                   <div className="py-10 text-center space-y-3">
@@ -1200,8 +1313,8 @@ export default function CreateEditQuotationPage() {
                         No materials found
                       </p>
                       <p className="text-[12px] text-[#6B7280] dark:text-gray-400 mt-0.5">
-                        {materialPickerSearch
-                          ? `No match for "${materialPickerSearch}"`
+                        {materialPickerSearch || pickerCategory !== 'All'
+                          ? `No match found in catalog`
                           : 'No saved materials in catalog'}
                       </p>
                     </div>
@@ -1220,27 +1333,58 @@ export default function CreateEditQuotationPage() {
                 ) : (
                   filteredMaterials.map((mat) => (
                     <button
-                      key={mat.id}
+                      key={mat.id || mat.localId}
                       type="button"
                       onClick={() => handleSelectMaterial(mat)}
-                      className="w-full text-left p-3 rounded-[12px] border border-slate-200 dark:border-gray-700/70 hover:border-[#2F6FED] hover:bg-blue-50/30 dark:hover:bg-[#202C3F] hover:scale-[1.01] active:scale-[0.99] transition-all duration-150 flex items-center justify-between gap-3 group cursor-pointer"
+                      className="w-full text-left p-2.5 sm:p-3 rounded-[12px] border border-slate-200 dark:border-gray-700/70 hover:border-[#2F6FED] hover:bg-blue-50/30 dark:hover:bg-[#202C3F] hover:scale-[1.01] active:scale-[0.99] transition-all duration-150 flex items-center justify-between gap-3 group cursor-pointer"
                     >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-bold text-[14px] text-[#0B1B3F] dark:text-white group-hover:text-[#2F6FED] transition-colors">
-                            {mat.name}
-                          </span>
-                          {(mat.code || mat.hsn) && (
-                            <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-gray-800 text-[#6B7280] dark:text-gray-300 text-[10px] font-semibold rounded">
-                              Code: {mat.code || mat.hsn}
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {/* 40x40px Material Thumbnail with graceful fallback */}
+                        <MaterialThumbnail src={mat.image_url} alt={mat.name} />
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-[14px] text-[#0B1B3F] dark:text-white group-hover:text-[#2F6FED] transition-colors">
+                              {mat.name}
                             </span>
+                            {/* Stock Status Informational Badge */}
+                            <span
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border ${
+                                mat.in_stock !== false
+                                  ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border-emerald-200/50 dark:border-emerald-900/50'
+                                  : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400 border-rose-200/50 dark:border-rose-900/50'
+                              }`}
+                            >
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  mat.in_stock !== false ? 'bg-emerald-500' : 'bg-rose-500'
+                                }`}
+                              />
+                              <span>
+                                {mat.in_stock !== false
+                                  ? (mat.stock_qty !== undefined && mat.stock_qty !== null && mat.stock_qty !== ''
+                                      ? `In Stock (${mat.stock_qty})`
+                                      : 'In Stock')
+                                  : 'Out of Stock'}
+                              </span>
+                            </span>
+                            {mat.category && (
+                              <span className="px-1.5 py-0.5 bg-blue-50 dark:bg-blue-950/60 text-[#2F6FED] border border-blue-200/50 dark:border-blue-900/50 text-[10px] font-semibold rounded-full">
+                                {mat.category}
+                              </span>
+                            )}
+                            {(mat.code || mat.hsn) && (
+                              <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-gray-800 text-[#6B7280] dark:text-gray-300 text-[10px] font-semibold rounded">
+                                Code: {mat.code || mat.hsn}
+                              </span>
+                            )}
+                          </div>
+                          {mat.description && (
+                            <p className="text-[12px] text-[#6B7280] dark:text-gray-400 line-clamp-1 mt-0.5">
+                              {mat.description}
+                            </p>
                           )}
                         </div>
-                        {mat.description && (
-                          <p className="text-[12px] text-[#6B7280] dark:text-gray-400 line-clamp-1 mt-0.5">
-                            {mat.description}
-                          </p>
-                        )}
                       </div>
 
                       <div className="text-right shrink-0">

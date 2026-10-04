@@ -43,6 +43,8 @@ create table if not exists materials (
   unit text default 'Nos',
   rate numeric default 0,
   description text,
+  category text,
+  image_url text,
   is_active boolean default true,
   created_at timestamp with time zone default now()
 );
@@ -93,6 +95,44 @@ alter table quotation_items drop constraint if exists quotation_items_material_i
 alter table quotation_items add constraint quotation_items_material_id_fkey 
   foreign key (material_id) references materials(id) on delete set null;
 
--- 9. (Optional Storage Bucket for logos and signatures)
--- You can create a public storage bucket named 'company-assets' in Supabase Storage.
+-- 9. Materials enhancements migration (category and image_url)
+alter table materials add column if not exists image_url text;
+
+-- 10. Storage Buckets for material images, logos, and signatures:
+-- Create a public bucket named 'material-images' (or 'company-assets') in Supabase Dashboard -> Storage.
+-- Ensure the bucket is toggled to Public so images load without signed URLs.
+
+-- 11. Materials inventory tracking migration
+alter table materials add column if not exists in_stock boolean default true;
+alter table materials add column if not exists stock_qty numeric;
+
+-- 12. Separate Material Categories Table Migration
+create table if not exists material_categories (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  created_at timestamp with time zone default now()
+);
+
+alter table material_categories enable row level security;
+
+create policy "auth_full_access" on material_categories 
+  for all using (auth.role() = 'authenticated') 
+  with check (auth.role() = 'authenticated');
+
+-- Migrate materials to reference category_id instead of a plain text category
+alter table materials add column if not exists category_id uuid references material_categories(id) on delete set null;
+
+-- Populate material_categories from existing distinct text categories and link them
+insert into material_categories (name)
+select distinct trim(category) from materials
+where category is not null and trim(category) != ''
+on conflict (name) do nothing;
+
+update materials m
+set category_id = c.id
+from material_categories c
+where trim(m.category) = c.name and m.category_id is null;
+
+
+
 

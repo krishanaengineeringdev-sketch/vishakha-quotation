@@ -3,7 +3,13 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { syncPendingChanges, syncFromSupabase } from '../db/localDb';
-import { getQuotations, getQuotationById, getCompanyProfile, deleteQuotation } from '../services/dataService';
+import {
+  getQuotations,
+  getQuotationById,
+  getCompanyProfile,
+  deleteQuotation,
+  getNextQuoteNo
+} from '../services/dataService';
 import {
   PrintableQuotationDoc,
   generateQuotationPdf,
@@ -13,6 +19,8 @@ import Header from '../components/Header';
 import Sidebar from '../components/Sidebar';
 import BottomNav from '../components/BottomNav';
 import PWAInstallBanner from '../components/PWAInstallBanner';
+import DashboardStatsSection from '../components/DashboardStatsSection';
+import { exportQuotationsToExcel } from '../utils/exportQuotations';
 import {
   Search,
   Plus,
@@ -26,7 +34,9 @@ import {
   Share2,
   Printer,
   Check,
-  AlertCircle
+  AlertCircle,
+  Copy,
+  FileSpreadsheet
 } from 'lucide-react';
 
 const containerVariants = {
@@ -61,9 +71,29 @@ export default function QuotationListPage() {
   const [actionLoading, setActionLoading] = useState(null); // { id, type: 'pdf' | 'share' }
   const [exportData, setExportData] = useState(null); // { quotation, profile }
   const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' }
+  const [isExporting, setIsExporting] = useState(false);
   const offscreenDocRef = useRef(null);
 
-  // Fetch quotations from Supabase (single source of truth when online)
+  const handleExportExcel = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    try {
+      // Fetch currently filtered/searched quotations, or all if no search query
+      const targetQuotes = searchQuery.trim() ? quotations : null;
+      const res = await exportQuotationsToExcel(targetQuotes);
+      showToast(
+        `Exported ${res.quoteCount} ${res.quoteCount === 1 ? 'quotation' : 'quotations'} (${res.count} items) to Excel!`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Export to Excel error:', err);
+      showToast(err.message || 'Failed to export quotations to Excel', 'error');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // Fetch quotations from Supabase / Dexie cache
   const fetchQuotations = useCallback(async () => {
     try {
       const data = await getQuotations(searchQuery);
@@ -204,7 +234,47 @@ export default function QuotationListPage() {
     }
   };
 
-  // 3. Print directly from card (navigate to Preview with autoPrint trigger)
+  // 3. Duplicate / Repeat Quotation from card
+  const handleDuplicateQuote = async (quote, e) => {
+    e?.stopPropagation();
+    const identifier = quote.id || quote.localId;
+    try {
+      const fullQuote = await getQuotationById(identifier);
+      if (!fullQuote) {
+        showToast('Could not load quotation details for duplication', 'error');
+        return;
+      }
+
+      const nextNo = await getNextQuoteNo();
+      const duplicatePayload = {
+        originalQuoteNo: fullQuote.quote_no,
+        quote_no: nextNo,
+        quote_date: new Date().toISOString().split('T')[0],
+        customerName: fullQuote.customers?.name || '',
+        customerPlace: fullQuote.customers?.place || '',
+        greeting: fullQuote.greeting || '',
+        closing: fullQuote.closing || '',
+        discount_percent: fullQuote.discount_percent || 0,
+        gst_percent: fullQuote.gst_percent || 0,
+        items: (fullQuote.items || []).map((it) => ({
+          material_id: it.material_id || null,
+          description: it.description || '',
+          unit: it.unit || 'Nos',
+          qty: it.qty || 1,
+          price: it.price !== undefined ? it.price : it.rate || 0,
+          rate: it.price !== undefined ? it.price : it.rate || 0,
+          total: it.total !== undefined ? it.total : it.amount || 0
+        }))
+      };
+
+      navigate('/quotation/new', { state: { duplicateFrom: duplicatePayload } });
+    } catch (err) {
+      console.error('Duplicate error:', err);
+      showToast('Failed to duplicate quotation', 'error');
+    }
+  };
+
+  // 4. Print directly from card (navigate to Preview with autoPrint trigger)
   const handlePrint = (quote, e) => {
     e?.stopPropagation();
     navigate(`/quotation/${quote.id || quote.localId}?autoPrint=true`);
@@ -279,6 +349,11 @@ export default function QuotationListPage() {
         )}
 
       <main className="flex-1 w-full max-w-[520px] lg:max-w-5xl xl:max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-3 sm:pt-6 pb-8">
+        {/* Reactive Dashboard Stats Section (above search bar) */}
+        <div className="mb-4 sm:mb-5">
+          <DashboardStatsSection showTopCustomers={false} />
+        </div>
+
         {/* Title, Search & Desktop Actions Row */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
           <div>
@@ -323,6 +398,23 @@ export default function QuotationListPage() {
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-[#2F6FED]' : ''}`} />
             </button>
 
+            {/* Export to Excel/CSV Button */}
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              disabled={isExporting || quotations.length === 0}
+              className="inline-flex items-center gap-1.5 h-10 px-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.02] active:scale-95 text-white text-[13px] font-semibold rounded-[10px] shadow-xs transition-all duration-150 shrink-0 cursor-pointer"
+              title={searchQuery.trim() ? 'Export filtered quotations to Excel (.xlsx)' : 'Export all quotations to Excel (.xlsx)'}
+              aria-label="Export to Excel"
+            >
+              {isExporting ? (
+                <RefreshCw className="w-4 h-4 animate-spin text-white" />
+              ) : (
+                <FileSpreadsheet className="w-4 h-4" />
+              )}
+              <span>{isExporting ? 'Preparing export...' : 'Export'}</span>
+            </button>
+
             {/* Desktop + New Quote Button */}
             <button
               onClick={() => navigate('/quotation/new')}
@@ -334,17 +426,46 @@ export default function QuotationListPage() {
           </div>
         </div>
 
-        {/* Quotation List Cards (responsive grid) */}
+        {/* Quotation List Skeleton Cards (responsive grid) */}
         {loading ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3.5 pt-2">
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3.5 pt-1">
             {[1, 2, 3, 4, 5, 6].map((n) => (
               <div
                 key={n}
-                className="h-[120px] bg-[#F3F5F9] dark:bg-[#1A2332] rounded-[14px] animate-pulse p-4 flex flex-col justify-between border border-transparent dark:border-gray-800"
+                className="bg-[#F3F5F9] dark:bg-[#1A2332] border border-slate-200/70 dark:border-gray-800 rounded-[14px] p-4 flex flex-col justify-between shadow-xs"
               >
-                <div className="h-4 bg-slate-200 dark:bg-gray-700 rounded w-1/3" />
-                <div className="h-3 bg-slate-200 dark:bg-gray-700 rounded w-2/3" />
-                <div className="h-6 bg-slate-200 dark:bg-gray-700 rounded w-1/2 mt-2" />
+                <div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 space-y-2">
+                      <div className="flex items-center gap-2">
+                        {/* Quote Number line */}
+                        <div className="h-5 w-28 skeleton rounded-[6px]" />
+                        {/* Date badge */}
+                        <div className="h-4 w-20 skeleton rounded-full" />
+                      </div>
+                      {/* Customer Name */}
+                      <div className="h-4 w-40 skeleton rounded-[6px] mt-1" />
+                      {/* Customer Place & item count */}
+                      <div className="h-3 w-28 skeleton rounded-[4px]" />
+                    </div>
+                    {/* Amount badge on right */}
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <div className="h-5 w-24 skeleton rounded-[6px]" />
+                      <div className="h-2.5 w-14 skeleton rounded-[4px]" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Action Icons Row */}
+                <div className="mt-4 pt-3 border-t border-slate-200/80 dark:border-gray-700/60 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 sm:gap-2">
+                    <div className="w-9 h-9 skeleton rounded-[8px]" />
+                    <div className="w-9 h-9 skeleton rounded-[8px]" />
+                    <div className="w-9 h-9 skeleton rounded-[8px]" />
+                    <div className="w-9 h-9 skeleton rounded-[8px]" />
+                  </div>
+                  <div className="w-9 h-9 skeleton rounded-[8px]" />
+                </div>
               </div>
             ))}
           </div>
@@ -437,13 +558,13 @@ export default function QuotationListPage() {
                     </div>
                   </div>
 
-                  {/* Bottom: Quick Actions Row ([👁 View] [⬇ PDF] [📤 Share] [🖨 Print] [🗑 Delete]) */}
-                  <div className="mt-3.5 pt-2.5 border-t border-slate-200/80 dark:border-gray-700/60 flex items-center justify-between gap-2">
-                    <span className="text-[11px] text-[#6B7280] dark:text-gray-400 font-semibold tracking-wide uppercase">
+                  {/* Bottom: Quick Actions Row ([👁 View] [⬇ PDF] [📤 Share] [📋 Duplicate] [🖨 Print] [🗑 Delete]) */}
+                  <div className="mt-3.5 pt-2.5 border-t border-slate-200/80 dark:border-gray-700/60 flex items-center justify-between gap-2 overflow-hidden">
+                    <span className="text-[11px] text-[#6B7280] dark:text-gray-400 font-semibold tracking-wide uppercase shrink-0">
                       Actions
                     </span>
 
-                    <div className="flex items-center gap-1.5 sm:gap-2">
+                    <div className="quotation-actions-row overflow-x-auto py-0.5">
                       {/* 1. View Button */}
                       <button
                         type="button"
@@ -453,7 +574,7 @@ export default function QuotationListPage() {
                         }}
                         title="View Quotation Preview"
                         aria-label="View Quotation"
-                        className="w-9 h-9 sm:w-8 sm:h-8 rounded-[8px] bg-white dark:bg-[#0B1220] border border-slate-200/80 dark:border-gray-700/80 text-[#6B7280] dark:text-gray-300 hover:text-[#2F6FED] dark:hover:text-blue-400 hover:border-[#2F6FED] dark:hover:border-blue-400 flex items-center justify-center hover:scale-105 active:scale-95 transition-all min-touch cursor-pointer shadow-2xs"
+                        className="action-icon-btn bg-white dark:bg-[#0B1220] border border-slate-200/80 dark:border-gray-700/80 text-[#6B7280] dark:text-gray-300 hover:text-[#2F6FED] dark:hover:text-blue-400 hover:border-[#2F6FED] dark:hover:border-blue-400 hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-2xs"
                       >
                         <Eye className="w-4 h-4" />
                       </button>
@@ -465,7 +586,7 @@ export default function QuotationListPage() {
                         onClick={(e) => handleDownloadPdf(quote, e)}
                         title="Download PDF"
                         aria-label="Download PDF"
-                        className="w-9 h-9 sm:w-8 sm:h-8 rounded-[8px] bg-white dark:bg-[#0B1220] border border-slate-200/80 dark:border-gray-700/80 text-[#6B7280] dark:text-gray-300 hover:text-[#2F6FED] dark:hover:text-blue-400 hover:border-[#2F6FED] dark:hover:border-blue-400 flex items-center justify-center hover:scale-105 active:scale-95 transition-all min-touch cursor-pointer shadow-2xs disabled:opacity-60"
+                        className="action-icon-btn bg-white dark:bg-[#0B1220] border border-slate-200/80 dark:border-gray-700/80 text-[#6B7280] dark:text-gray-300 hover:text-[#2F6FED] dark:hover:text-blue-400 hover:border-[#2F6FED] dark:hover:border-blue-400 hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-2xs disabled:opacity-60"
                       >
                         {isPdfLoading ? (
                           <div className="w-3.5 h-3.5 border-2 border-[#2F6FED]/40 border-t-[#2F6FED] rounded-full animate-spin" />
@@ -481,7 +602,7 @@ export default function QuotationListPage() {
                         onClick={(e) => handleShareWhatsApp(quote, e)}
                         title="Share on WhatsApp"
                         aria-label="Share on WhatsApp"
-                        className="w-9 h-9 sm:w-8 sm:h-8 rounded-[8px] bg-white dark:bg-[#0B1220] border border-slate-200/80 dark:border-gray-700/80 text-[#6B7280] dark:text-gray-300 hover:text-emerald-600 dark:hover:text-emerald-400 hover:border-emerald-500 dark:hover:border-emerald-500 flex items-center justify-center hover:scale-105 active:scale-95 transition-all min-touch cursor-pointer shadow-2xs disabled:opacity-60"
+                        className="action-icon-btn bg-white dark:bg-[#0B1220] border border-slate-200/80 dark:border-gray-700/80 text-[#6B7280] dark:text-gray-300 hover:text-emerald-600 dark:hover:text-emerald-400 hover:border-emerald-500 dark:hover:border-emerald-500 hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-2xs disabled:opacity-60"
                       >
                         {isShareLoading ? (
                           <div className="w-3.5 h-3.5 border-2 border-emerald-600/40 border-t-emerald-600 rounded-full animate-spin" />
@@ -490,24 +611,35 @@ export default function QuotationListPage() {
                         )}
                       </button>
 
-                      {/* 4. Print Button */}
+                      {/* 4. Duplicate Quotation Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => handleDuplicateQuote(quote, e)}
+                        title="Duplicate Quotation (Review before saving)"
+                        aria-label="Duplicate Quotation"
+                        className="action-icon-btn bg-white dark:bg-[#0B1220] border border-slate-200/80 dark:border-gray-700/80 text-[#6B7280] dark:text-gray-300 hover:text-[#2F6FED] dark:hover:text-blue-400 hover:border-[#2F6FED] dark:hover:border-blue-400 hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-2xs"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </button>
+
+                      {/* 5. Print Button */}
                       <button
                         type="button"
                         onClick={(e) => handlePrint(quote, e)}
                         title="Print Document"
                         aria-label="Print Document"
-                        className="w-9 h-9 sm:w-8 sm:h-8 rounded-[8px] bg-white dark:bg-[#0B1220] border border-slate-200/80 dark:border-gray-700/80 text-[#6B7280] dark:text-gray-300 hover:text-[#2F6FED] dark:hover:text-blue-400 hover:border-[#2F6FED] dark:hover:border-blue-400 flex items-center justify-center hover:scale-105 active:scale-95 transition-all min-touch cursor-pointer shadow-2xs"
+                        className="action-icon-btn bg-white dark:bg-[#0B1220] border border-slate-200/80 dark:border-gray-700/80 text-[#6B7280] dark:text-gray-300 hover:text-[#2F6FED] dark:hover:text-blue-400 hover:border-[#2F6FED] dark:hover:border-blue-400 hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-2xs"
                       >
                         <Printer className="w-4 h-4" />
                       </button>
 
-                      {/* 5. Delete Button */}
+                      {/* 6. Delete Button */}
                       <button
                         type="button"
                         onClick={(e) => handleDeleteClick(quote, e)}
                         title="Delete Quotation"
                         aria-label="Delete Quotation"
-                        className="w-9 h-9 sm:w-8 sm:h-8 rounded-[8px] bg-white dark:bg-[#0B1220] border border-slate-200/80 dark:border-gray-700/80 text-[#6B7280] dark:text-gray-300 hover:text-rose-600 dark:hover:text-rose-400 hover:border-rose-400 dark:hover:border-rose-800 hover:bg-rose-50 dark:hover:bg-rose-950/30 flex items-center justify-center hover:scale-105 active:scale-95 transition-all min-touch cursor-pointer shadow-2xs"
+                        className="action-icon-btn bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/40 hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-2xs"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>

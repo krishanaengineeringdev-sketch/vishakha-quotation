@@ -9,6 +9,7 @@ import CreateEditQuotationPage from './pages/CreateEditQuotationPage';
 import QuotationPreviewPage from './pages/QuotationPreviewPage';
 import SettingsPage from './pages/SettingsPage';
 import MaterialsPage from './pages/MaterialsPage';
+import DashboardPage from './pages/DashboardPage';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -68,6 +69,15 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <QuotationListPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <DashboardPage />
               </ProtectedRoute>
             }
           />

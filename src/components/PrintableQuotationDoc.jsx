@@ -514,24 +514,32 @@ export const PrintableQuotationDoc = forwardRef(function PrintableQuotationDoc(
                   {item.sl_no || index + 1}
                 </td>
                 <td className={`px-3 font-medium text-[#0B1B3F] border-r border-slate-200 whitespace-pre-line leading-relaxed ${rowPadding}`} style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                  {item.description}
+                  {item.description || item.name || item.desc || '—'}
                 </td>
                 <td className={`px-2 text-center text-[#6B7280] font-semibold border-r border-slate-200 whitespace-nowrap ${rowPadding}`}>
-                  {item.unit || 'Nos'}
+                  {item.unit || item.uom || 'Nos'}
                 </td>
                 <td className={`px-2 text-center font-semibold border-r border-slate-200 ${rowPadding}`}>
-                  {item.qty}
+                  {item.qty !== undefined && item.qty !== null ? item.qty : (item.quantity ?? 1)}
                 </td>
                 <td className={`px-3 text-right font-semibold border-r border-slate-200 whitespace-nowrap ${rowPadding}`}>
-                  {formatIndianCurrency(item.price !== undefined ? item.price : item.rate, '')}
+                  {formatIndianCurrency(item.price !== undefined && item.price !== null ? item.price : item.rate, '')}
                 </td>
                 <td className={`px-3 text-right font-bold text-[#0B1B3F] whitespace-nowrap ${rowPadding}`}>
-                  {formatIndianCurrency(item.total !== undefined ? item.total : item.amount, '')}
+                  {formatIndianCurrency(item.total !== undefined && item.total !== null ? item.total : item.amount, '')}
                 </td>
               </tr>
             ))}
 
-            {Array.from({ length: emptyRowsCount }).map((_, idx) => (
+            {(!quotation.items || quotation.items.length === 0) && (
+              <tr>
+                <td colSpan={6} className="py-8 text-center text-slate-400 font-medium italic">
+                  No line items found for this quotation.
+                </td>
+              </tr>
+            )}
+
+            {itemsCount > 0 && Array.from({ length: emptyRowsCount }).map((_, idx) => (
               <tr key={`empty-${idx}`} className="border-b border-slate-200/50">
                 <td className={`px-2 text-center text-transparent border-r border-slate-200/50 select-none ${rowPadding}`}>&nbsp;</td>
                 <td className={`px-3 text-transparent border-r border-slate-200/50 select-none ${rowPadding}`}>&nbsp;</td>

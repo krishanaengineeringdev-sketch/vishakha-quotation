@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import {
+  LayoutDashboard,
   FileText,
   PlusCircle,
   Package,
@@ -13,17 +14,24 @@ import {
   LogOut,
   Sparkles,
   Plus,
-  Building
+  Building,
+  RefreshCw
 } from 'lucide-react';
 import { COMPANY_CONFIG } from '../config/companyConfig';
+import { useSyncStatus } from '../hooks/useSyncStatus';
 
 export default function Sidebar() {
   const navigate = useNavigate();
   const { user, signOut, isDemoMode } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const isOnline = useOnlineStatus();
+  const { isOnline, isSyncing, pendingCount } = useSyncStatus();
 
   const navItems = [
+    {
+      to: '/dashboard',
+      label: 'Dashboard',
+      icon: LayoutDashboard
+    },
     {
       to: '/',
       label: 'Quotations',
@@ -113,23 +121,41 @@ export default function Sidebar() {
       <div className="p-4 border-t border-slate-100 dark:border-gray-800 space-y-2">
         {/* Connectivity Status */}
         <div
-          title={isOnline ? 'Online — synced with cloud' : 'Offline — saving to local storage'}
+          title={
+            isSyncing
+              ? `Syncing ${pendingCount} offline ${pendingCount === 1 ? 'item' : 'items'} to cloud...`
+              : isOnline
+              ? 'Online — synced with cloud'
+              : `Offline — ${pendingCount > 0 ? `${pendingCount} changes waiting to sync` : 'saving to local storage'}`
+          }
           className={`flex items-center justify-between px-3 py-2 rounded-[8px] text-[12px] font-medium transition-colors ${
-            isOnline
+            isSyncing
+              ? 'bg-blue-50/80 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-300/80 dark:border-blue-800/80'
+              : isOnline
               ? 'bg-emerald-50/70 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60'
               : 'bg-amber-50/70 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 border border-amber-300/60 dark:border-amber-800/60'
           }`}
         >
           <div className="flex items-center gap-2">
-            <span
-              className={`w-2 h-2 rounded-full shrink-0 ${
-                isOnline ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'
-              }`}
-            />
-            <span>{isOnline ? 'Online Mode' : 'Offline Mode'}</span>
+            {isSyncing ? (
+              <RefreshCw className="w-3.5 h-3.5 text-[#2F6FED] animate-spin shrink-0" />
+            ) : (
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 ${
+                  isOnline ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'
+                }`}
+              />
+            )}
+            <span>
+              {isSyncing
+                ? `Syncing ${pendingCount > 0 ? `${pendingCount} items...` : 'changes...'}`
+                : isOnline
+                ? 'Online Mode'
+                : 'Offline Mode'}
+            </span>
           </div>
           <span className="text-[10px] uppercase font-bold tracking-wider opacity-80">
-            {isOnline ? 'Synced' : 'Local'}
+            {isSyncing ? 'Syncing' : isOnline ? 'Synced' : 'Local'}
           </span>
         </div>
 

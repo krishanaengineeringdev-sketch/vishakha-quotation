@@ -173,6 +173,91 @@
   color: white !important;
 }
 
+/* Custom Category Dropdown Styling */
+.category-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 6px;
+  z-index: 50;
+  background: #FFFFFF;
+  border: 1px solid #E2E5EA;
+  border-radius: 10px;
+  max-height: 240px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dark .category-dropdown-menu {
+  background: #1A2332;
+  border: 1px solid #2D3B52;
+  color: white;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.category-dropdown-option {
+  padding: 10px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: all 0.15s ease;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.category-dropdown-option:hover,
+.category-dropdown-option.selected {
+  background: #2F6FED !important;
+  color: white !important;
+}
+
+/* Generic Custom Dropdown Styling (reused across app for Unit, Category, GST, etc.) */
+.custom-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  margin-top: 6px;
+  z-index: 50;
+  background: #FFFFFF;
+  border: 1px solid #E2E5EA;
+  border-radius: 10px;
+  max-height: 240px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  box-sizing: border-box;
+}
+
+.dark .custom-dropdown-menu {
+  background: #1A2332;
+  border: 1px solid #2D3B52;
+  color: white;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.custom-dropdown-option {
+  padding: 9px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: all 0.15s ease;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.custom-dropdown-option:hover,
+.custom-dropdown-option.selected {
+  background: #2F6FED !important;
+  color: white !important;
+}
+
+
 .header-row {
   display: flex;
   justify-content: space-between;
@@ -285,3 +370,81 @@
     page-break-inside: avoid !important;
   }
 }
+
+/* Quotation Card Actions Row & Buttons */
+.quotation-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.action-icon-btn {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+@media (max-width: 420px) {
+  .quotation-actions-row {
+    gap: 6px;
+  }
+  .action-icon-btn {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+  }
+}
+
+/* ==========================================================================
+   Skeleton Loading & Shimmer Animation
+   ========================================================================== */
+.skeleton {
+  background: linear-gradient(90deg, #F3F5F9 25%, #E8EAF0 50%, #F3F5F9 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 10px;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.dark .skeleton {
+  background: linear-gradient(90deg, #1A2332 25%, #243147 50%, #1A2332 75%);
+  background-size: 200% 100%;
+}
+
+/* ==========================================================================
+   Dashboard Top Accounts Badge
+   ========================================================================== */
+.top-accounts-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  border-radius: 20px;
+  white-space: nowrap;
+  line-height: 1.2;
+  width: fit-content;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+
